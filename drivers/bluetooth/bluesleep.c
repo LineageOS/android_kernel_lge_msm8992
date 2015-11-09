@@ -852,6 +852,17 @@ static const struct file_operations bluesleep_proc_read_fops = {
 	.open	= bluesleep_proc_open,
 	.read   = seq_read,
 };
+
+#ifdef CONFIG_LINE_DISCIPLINE_DRIVER
+static struct platform_device bcm_ldisc_device = {
+    .name = "bcm_ldisc",
+    .id = -1,
+    .dev = {
+
+    },
+};
+#endif
+
 /**
  * Initializes the module.
  * @return On success, 0. On error, -1, and <code>errno</code> is set
@@ -936,6 +947,11 @@ static int __init bluesleep_init(void)
 		goto fail;
 	}
 #endif
+
+#ifdef CONFIG_LINE_DISCIPLINE_DRIVER
+	platform_device_register(&bcm_ldisc_device);
+#endif
+
 	flags = 0; /* clear all status bits */
 	/* Initialize spinlock. */
 	spin_lock_init(&rw_lock);
