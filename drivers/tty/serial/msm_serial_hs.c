@@ -2139,6 +2139,33 @@ static struct msm_hs_port *msm_hs_get_hs_port(int port_index)
 	return NULL;
 }
 
+/* Get UART Clock State : */
+int msm_hs_uart_get_clk_state(struct uart_port *uport)
+{
+	struct msm_hs_port *msm_uport = UARTDM_TO_MSM(uport);
+	unsigned long flags;
+	int ret = MSM_HS_CLK_OFF;
+
+	spin_lock_irqsave(&uport->lock, flags);
+
+	switch (msm_uport->pm_state) {
+		case MSM_HS_PM_ACTIVE:
+			ret = MSM_HS_CLK_ON;
+			break;
+        case MSM_HS_PM_SUSPENDED:
+			ret = MSM_HS_CLK_OFF;
+			break;
+		default:
+			ret = MSM_HS_CLK_OFF;
+            break;
+	}
+
+	spin_unlock_irqrestore(&uport->lock, flags);
+
+	return ret;
+}
+EXPORT_SYMBOL(msm_hs_uart_get_clk_state);
+
 void toggle_wakeup_interrupt(struct msm_hs_port *msm_uport)
 {
 	unsigned long flags;
