@@ -75,12 +75,10 @@ static const struct hci_uart_proto brcmp = {
 /*****************************************************************************
 **  Constants & Macros for dynamic logging
 *****************************************************************************/
-#ifndef BTLDISC_DEBUG
 #define BTLDISC_DEBUG TRUE
-#endif
 
 /* set this module parameter to enable debug info */
-extern int ldisc_dbg_param;
+extern int ldisc_dbg_param = 1;
 
 #if (BTLDISC_DEBUG)
 #define BRCM_HCI_DBG(flag, fmt, arg...) \
