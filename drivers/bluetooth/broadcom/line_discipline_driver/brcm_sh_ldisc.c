@@ -1806,7 +1806,7 @@ static int __init brcm_hci_uart_init( void )
     static struct tty_ldisc_ops hci_uart_ldisc;
     int err;
 
-    BT_LDISC_DBG(V4L2_DBG_INIT, "HCI BRCM UART driver ver %s", VERSION);
+    BT_LDISC_DBG(1, "HCI BRCM UART driver ver %s", VERSION);
 
     /* Register the tty discipline */
 
@@ -1923,7 +1923,7 @@ static int bcmbt_ldisc_probe(struct platform_device *pdev)
 
     int rc;
     struct hci_uart *hu;
-    BT_LDISC_DBG(V4L2_DBG_INIT, "%s", __func__);
+    BT_LDISC_DBG(1, "%s", __func__);
 
     if ((pdev->id != -1) && (pdev->id < MAX_BRCM_DEVICES)) {
         /* multiple devices could exist */
@@ -1941,7 +1941,7 @@ static int bcmbt_ldisc_probe(struct platform_device *pdev)
     }
     dev_set_drvdata(&pdev->dev, hu);
 
-    BT_LDISC_DBG(V4L2_DBG_INIT, "%s calling brcm_hci_uart_init ", __func__);
+    BT_LDISC_DBG(1, "%s calling brcm_hci_uart_init ", __func__);
 
     /* register the tty line discipline driver */
     rc = brcm_hci_uart_init();
@@ -1963,7 +1963,7 @@ static int bcmbt_ldisc_probe(struct platform_device *pdev)
     }
     if( LpmUseBluesleep )
         sleep = SLEEP_BLUESLEEP;
-    BT_LDISC_DBG(V4L2_DBG_INIT, "%s %p sleep %d", __func__,hu,sleep);
+    BT_LDISC_DBG(1, "%s %p sleep %d", __func__,hu,sleep);
 
     return 0;
 }
