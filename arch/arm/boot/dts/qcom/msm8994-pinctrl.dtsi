@@ -993,11 +993,6 @@
 			qcom,num-grp-pins = <1>;
 			qcom,pin-func = <0>;
 			label = "wcd-intr-default";
-			wcd_intr_default: default {
-				drive-strength = <2>; /* 2 MA */
-				bias-pull-down; /* pull down */
-				input-enable;
-			};
 		};
 
 		cci0_active {
