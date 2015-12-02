@@ -1,0 +1,21 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "bf8cb3f7_349ec807",
+        "filename": "arch/arm64/boot/dts/lge/msm8992-p1_vzw/msm8992-p1_vzw-connectivity.dtsi",
+        "patchSetId": 1
+      },
+      "lineNbr": 42,
+      "author": {
+        "id": 523
+      },
+      "writtenOn": "2015-12-02T03:24:51Z",
+      "side": 0,
+      "message": "this stuff is needed for bluetooth",
+      "revId": "2778c5f215f317b72ccd78ea8a38bb987e733d6c",
+      "serverId": "1ec6b3db-b2c1-4fa4-84a2-4c7efe89ba71",
+      "unresolved": false
+    }
+  ]
+}
