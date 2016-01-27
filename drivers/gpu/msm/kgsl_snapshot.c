@@ -686,7 +686,6 @@ int kgsl_device_snapshot(struct kgsl_device *device,
 	snapshot->start = device->snapshot_memory.ptr;
 	snapshot->ptr = device->snapshot_memory.ptr;
 	snapshot->remain = device->snapshot_memory.size;
-	atomic_set(&snapshot->sysfs_read, 0);
 
 	header = (struct kgsl_snapshot_header *) snapshot->ptr;
 
@@ -792,8 +791,6 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 
 	mutex_lock(&device->mutex);
 	snapshot = device->snapshot;
-	if (snapshot != NULL)
-		atomic_inc(&snapshot->sysfs_read);
 	mutex_unlock(&device->mutex);
 
 	/* Return nothing if we haven't taken a snapshot yet */
@@ -805,10 +802,8 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 	 * to allow userspace to bail if things go horribly wrong.
 	 */
 	ret = wait_for_completion_interruptible(&snapshot->dump_gate);
-	if (ret) {
-		atomic_dec(&snapshot->sysfs_read);
+	if (ret)
 		return ret;
-	}
 
 	obj_itr_init(&itr, buf, off, count);
 
@@ -817,7 +812,7 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 		goto done;
 
 	/* Dump the memory pool if it exists */
-	if (snapshot->mempool) {
+	if (device->snapshot->mempool) {
 		ret = obj_itr_out(&itr, snapshot->mempool,
 				snapshot->mempool_size);
 		if (ret == 0)
@@ -836,35 +831,26 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 	 * Make sure everything has been written out before destroying things.
 	 * The best way to confirm this is to go all the way through without
 	 * writing any bytes - so only release if we get this far and
-	 * itr->write is 0 and there are no concurrent reads pending
+	 * itr->write is 0
 	 */
 
 	if (itr.write == 0) {
-		bool snapshot_free = false;
-
 		mutex_lock(&device->mutex);
-		if (atomic_dec_and_test(&snapshot->sysfs_read)) {
-			device->snapshot = NULL;
-			snapshot_free = true;
-		}
+		device->snapshot = NULL;
 		mutex_unlock(&device->mutex);
 
-		if (snapshot_free) {
-			list_for_each_entry_safe(obj, tmp,
-						&snapshot->obj_list, node)
-				kgsl_snapshot_put_object(obj);
+		list_for_each_entry_safe(obj, tmp, &snapshot->obj_list, node)
+			kgsl_snapshot_put_object(obj);
 
-			if (snapshot->mempool)
-				vfree(snapshot->mempool);
+		if (snapshot->mempool)
+			vfree(snapshot->mempool);
 
-			kfree(snapshot);
-			KGSL_CORE_ERR("snapshot: objects released\n");
-		}
-		return 0;
+		kfree(snapshot);
+		KGSL_CORE_ERR("snapshot: objects released\n");
 	}
 
 done:
-	atomic_dec(&snapshot->sysfs_read);
+
 	return itr.write;
 }
 

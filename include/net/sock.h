@@ -355,7 +355,6 @@ struct sock {
                 sk_no_check  : 2,
                 sk_userlocks : 4,
                 sk_protocol  : 8,
-#define SK_PROTOCOL_MAX U8_MAX
                 sk_type      : 16;
     kmemcheck_bitfield_end(flags);
     int            sk_wmem_queued;
@@ -674,6 +673,9 @@ enum sock_flags {
              */
     SOCK_FILTER_LOCKED, /* Filter cannot be changed anymore */
     SOCK_SELECT_ERR_QUEUE, /* Wake select on error queue */
+#ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
+    SOCK_MPTCP, /* MPTCP set on this socket */
+#endif
 };
 
 static inline void sock_copy_flags(struct sock *nsk, struct sock *osk)
@@ -865,6 +867,18 @@ extern void sk_set_memalloc(struct sock *sk);
 extern void sk_clear_memalloc(struct sock *sk);
 
 extern int sk_wait_data(struct sock *sk, long *timeo);
+
+#ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
+/* START - needed for MPTCP */
+struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority, int family);
+void sock_lock_init(struct sock *sk);
+
+extern struct lock_class_key af_callback_keys[AF_MAX];
+extern char *const af_family_clock_key_strings[AF_MAX+1];
+
+#define SK_FLAGS_TIMESTAMP ((1UL << SOCK_TIMESTAMP) | (1UL << SOCK_TIMESTAMPING_RX_SOFTWARE))
+/* END - needed for MPTCP */
+#endif
 
 struct request_sock_ops;
 struct timewait_sock_ops;
