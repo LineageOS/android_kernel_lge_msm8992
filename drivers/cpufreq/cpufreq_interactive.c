@@ -36,6 +36,15 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/cpufreq_interactive.h>
 
+#ifdef CONFIG_LGE_LBFC
+#include "lbfc.h"
+struct cpufreq_loadinfo {
+	int load;
+	int freq;
+};
+static DEFINE_PER_CPU(struct cpufreq_loadinfo, cpuloadinfo);
+#endif
+
 struct cpufreq_interactive_policyinfo {
 	struct timer_list policy_timer;
 	struct timer_list policy_slack_timer;
@@ -379,6 +388,24 @@ static unsigned int choose_freq(struct cpufreq_interactive_policyinfo *pcpu,
 	return freq;
 }
 
+#ifdef CONFIG_LGE_LBFC
+int get_cpuload_info(int little, int thresh)
+{
+	int i, need_feeding = 0;
+	struct cpufreq_loadinfo *pcpu;
+	for_each_online_cpu(i) {
+		if(i < little) {
+			pcpu = &per_cpu(cpuloadinfo, i);
+			if(pcpu->load >= thresh)
+				need_feeding++;
+		} else {
+			break;
+		}
+	}
+	return need_feeding;
+}
+#endif
+
 static u64 update_load(int cpu)
 {
 	struct cpufreq_interactive_policyinfo *ppol = per_cpu(polinfo, cpu);
@@ -390,7 +417,10 @@ static u64 update_load(int cpu)
 	unsigned int delta_idle;
 	unsigned int delta_time;
 	u64 active_time;
-
+#ifdef CONFIG_LGE_LBFC
+	int cur_load = 0;
+	struct cpufreq_loadinfo *cur_loadinfo = &per_cpu(cpuloadinfo, cpu);
+#endif
 	now_idle = get_cpu_idle_time(cpu, &now, tunables->io_is_busy);
 	delta_idle = (unsigned int)(now_idle - pcpu->time_in_idle);
 	delta_time = (unsigned int)(now - pcpu->time_in_idle_timestamp);
@@ -404,7 +434,78 @@ static u64 update_load(int cpu)
 
 	pcpu->time_in_idle = now_idle;
 	pcpu->time_in_idle_timestamp = now;
+
+#ifdef CONFIG_LGE_LBFC
+	cur_load = (unsigned int)(active_time * 100) / delta_time;
+	cur_loadinfo->load = (cur_load * ppol->policy->cur) /
+                    ppol->policy->cpuinfo.max_freq;
+	cur_loadinfo->freq = ppol->policy->cur;
+#endif
 	return now;
+}
+
+void check_gpu(int cpu,u64 now)
+{
+	struct cpufreq_interactive_policyinfo *ppol = per_cpu(polinfo, cpu);
+//	struct cpufreq_interactive_cpuinfo *pcpu =
+//		&per_cpu(cpuinfo, cpu);
+	struct cpufreq_interactive_tunables *tunables =
+		ppol->policy->governor_data;
+	extern int gpu_power_level;
+	extern int gpu_max_power_level;
+	unsigned int cpu_online_num;
+
+	cpu_online_num = num_online_cpus();
+
+	/* cannot use in these case*/
+	if(cpu_online_num < 4
+		|| gpu_max_power_level < tunables->gpu_max_freq){
+		if(change_target_load){
+			printk("[cancun] recover tl online_cpu:%d,gpu_max_power_level:%d\n",
+					cpu_online_num,	gpu_max_power_level);
+		}
+		gpu_idletime = 0;
+		gpu_busytime = 0;
+		change_target_load = 0;
+		return ;
+	}
+
+	if(tunables->is_cancun && cpu == 0){
+		if(gpu_power_level > tunables->gpu_range_start_freq
+			&& gpu_power_level <  tunables->gpu_range_end_freq){
+			gpu_idletime = 0;
+			if(gpu_busytime == 0){
+				gpu_busytime = now;
+			}
+			if(gpu_busytime > 0
+				&& now - gpu_busytime > tunables->gpu_range_enter_time){
+				if(!change_target_load){
+					change_target_load = 1;
+					printk("[cancun] cpu %d tl to %d, gpu:%d online:%d\n"
+						,(int)cpu,tunables->gpu_target_load
+						,gpu_power_level,cpu_online_num);
+				}
+			}
+		}
+		else{
+			if(change_target_load){
+				if(gpu_idletime == 0){
+					gpu_idletime = now;
+				}
+				if(gpu_idletime > 0
+					&& now - gpu_idletime > tunables->gpu_range_out_time){
+					change_target_load = 0;
+					gpu_busytime = 0;
+					printk("[cancun] recover tl value, gpu:%d \n"
+						,gpu_power_level);
+				}
+			}
+			else{
+				gpu_busytime = 0;
+				gpu_idletime = 0;
+			}
+		}
+	}
 }
 
 #define MAX_LOCAL_LOAD 100
@@ -523,6 +624,9 @@ static void cpufreq_interactive_timer(unsigned long data)
 	}
 
 	new_freq = ppol->freq_table[index].frequency;
+#ifdef CONFIG_LGE_LBFC
+	_update_cpu_load(data, new_freq, cpu_load);
+#endif
 
 	if (new_freq < ppol->target_freq &&
 	    now - ppol->max_freq_hyst_start_time <
@@ -629,9 +733,19 @@ static int cpufreq_interactive_speedchange_task(void *data)
 			}
 
 			if (ppol->target_freq != ppol->policy->cur)
+#ifdef CONFIG_LGE_LBFC
+			{
+				stack(cpu, ppol->target_freq);
+				if (get_lbfc_state(cpu))
+					__cpufreq_driver_target(ppol->policy,
+							ppol->target_freq,
+							CPUFREQ_RELATION_H);
+			}
+#else
 				__cpufreq_driver_target(ppol->policy,
 							ppol->target_freq,
 							CPUFREQ_RELATION_H);
+#endif
 			trace_cpufreq_interactive_setspeed(cpu,
 						     ppol->target_freq,
 						     ppol->policy->cur);
@@ -728,7 +842,6 @@ static int cpufreq_interactive_notifier(
 	struct cpufreq_interactive_policyinfo *ppol;
 	int cpu;
 	unsigned long flags;
-
 	if (val == CPUFREQ_POSTCHANGE) {
 		ppol = per_cpu(polinfo, freq->cpu);
 		if (!ppol)
@@ -1618,6 +1731,11 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		ppol->reject_notification = false;
 
 		mutex_unlock(&gov_lock);
+		
+#ifdef CONFIG_LGE_LBFC
+		_update_online_state(true, policy);
+#endif
+
 		break;
 
 	case CPUFREQ_GOV_STOP:
@@ -1634,6 +1752,11 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 		ppol->reject_notification = false;
 
 		mutex_unlock(&gov_lock);
+
+#ifdef CONFIG_LGE_LBFC
+		_update_online_state(false, policy);
+#endif
+
 		break;
 
 	case CPUFREQ_GOV_LIMITS:
@@ -1663,6 +1786,31 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 	}
 	return 0;
 }
+#ifdef CONFIG_LGE_LBFC
+int cpufreq_interactive_get_target_freq(int cpu)
+{
+//	struct cpufreq_interactive_cpuinfo *pcpu;
+//	pcpu = &per_cpu(cpuinfo, cpu);
+	struct cpufreq_interactive_policyinfo *ppol = per_cpu(polinfo, cpu);
+	return ppol->policy->cur;
+}
+int cpufreq_interactive_gov_stat(int cpu)
+{
+//	struct cpufreq_interactive_cpuinfo *pcpu;
+	int result = 0;
+//	pcpu = &per_cpu(cpuinfo, cpu);
+	struct cpufreq_interactive_policyinfo *ppol = per_cpu(polinfo, cpu);
+	if (!down_read_trylock(&ppol->enable_sem))
+		return 0;
+	if (!ppol->governor_enabled) {
+		up_read(&ppol->enable_sem);
+		return 0;
+	}
+	result = ppol->governor_enabled;
+	up_read(&ppol->enable_sem);
+	return result;
+}
+#endif
 
 #ifndef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE
 static
