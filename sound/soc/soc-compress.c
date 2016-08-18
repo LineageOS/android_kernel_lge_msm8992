@@ -750,6 +750,7 @@ static int sst_compr_get_metadata(struct snd_compr_stream *cstream,
 }
 /* ASoC Compress operations */
 static struct snd_compr_ops soc_compr_ops = {
+<<<<<<< HEAD
 	.open			= soc_compr_open,
 	.free			= soc_compr_free,
 	.set_params		= soc_compr_set_params,
@@ -762,10 +763,25 @@ static struct snd_compr_ops soc_compr_ops = {
 	.ack			= soc_compr_ack,
 	.get_caps		= soc_compr_get_caps,
 	.get_codec_caps		= soc_compr_get_codec_caps
+=======
+	.open		= soc_compr_open,
+	.free		= soc_compr_free,
+	.set_params	= soc_compr_set_params,
+	.set_metadata   = sst_compr_set_metadata,
+    .set_next_track_param	= sst_compr_set_next_track_param,
+	.get_metadata	= sst_compr_get_metadata,
+	.get_params	= soc_compr_get_params,
+	.trigger	= soc_compr_trigger,
+	.pointer	= soc_compr_pointer,
+	.ack		= soc_compr_ack,
+	.get_caps	= soc_compr_get_caps,
+	.get_codec_caps = soc_compr_get_codec_caps
+>>>>>>> f947c3a... ALSA: compress: Add support to send codec specific data
 };
 
 /* ASoC Dynamic Compress operations */
 static struct snd_compr_ops soc_compr_dyn_ops = {
+<<<<<<< HEAD
 	.open			= soc_compr_open_fe,
 	.free			= soc_compr_free_fe,
 	.set_params		= soc_compr_set_params_fe,
@@ -778,6 +794,20 @@ static struct snd_compr_ops soc_compr_dyn_ops = {
 	.ack			= soc_compr_ack,
 	.get_caps		= soc_compr_get_caps,
 	.get_codec_caps		= soc_compr_get_codec_caps
+=======
+	.open		= soc_compr_open_fe,
+	.free		= soc_compr_free_fe,
+	.set_params	= soc_compr_set_params_fe,
+	.get_params	= soc_compr_get_params,
+	.set_metadata   = sst_compr_set_metadata,
+    .set_next_track_param	= sst_compr_set_next_track_param,
+	.get_metadata	= sst_compr_get_metadata,
+	.trigger	= soc_compr_trigger_fe,
+	.pointer	= soc_compr_pointer,
+	.ack		= soc_compr_ack,
+	.get_caps	= soc_compr_get_caps,
+	.get_codec_caps = soc_compr_get_codec_caps
+>>>>>>> f947c3a... ALSA: compress: Add support to send codec specific data
 };
 
 /* create a new compress */
