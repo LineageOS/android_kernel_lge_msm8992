@@ -6777,6 +6777,9 @@ static int smbchg_probe(struct spmi_device *spmi)
 		goto unregister_dc_psy;
 	}
 
+	// Workaround bug
+	chip->usb_present = 1;
+
 	power_supply_set_present(chip->usb_psy, chip->usb_present);
 
 	dump_regs(chip);
