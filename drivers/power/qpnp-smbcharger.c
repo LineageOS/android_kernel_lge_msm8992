@@ -4896,6 +4896,7 @@ static void smbchg_usb_remove_work(struct work_struct *work)
 	}
 
 	usbin_vol = get_usb_adc(chip);
+
 #ifdef CONFIG_LGE_PM_SMB_DEBUG
 	pr_smb(PR_LGE, "[LGE]USB removal check(usbin=%d)\n",usbin_vol);
 #endif
@@ -6776,6 +6777,9 @@ static int smbchg_probe(struct spmi_device *spmi)
 		dev_err(&spmi->dev, "Unable to request irqs rc = %d\n", rc);
 		goto unregister_dc_psy;
 	}
+
+	// Workaround bug
+	chip->usb_present = 1;
 
 	power_supply_set_present(chip->usb_psy, chip->usb_present);
 
