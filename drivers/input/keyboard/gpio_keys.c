@@ -31,14 +31,6 @@
 #include <linux/spinlock.h>
 #include <linux/pinctrl/consumer.h>
 
-#define CONFIG_LGE_HALL_IC
-#ifdef CONFIG_LGE_HALL_IC
-#include <linux/switch.h>
-struct switch_dev hallic_sdev = {
-	.name = "smartcover",
-};
-#endif
-
 struct gpio_button_data {
 	const struct gpio_keys_button *button;
 	struct input_dev *input;
@@ -345,14 +337,10 @@ static void gpio_keys_gpio_report_event(struct gpio_button_data *bdata)
 	} else {
 		input_event(input, type, button->code, !!state);
 
-#ifdef CONFIG_LGE_HALL_IC
 		if (!strncmp(bdata->button->desc, "hall_ic", 7)){
-			if (hallic_sdev.state != state){
-				switch_set_state(&hallic_sdev, state);
-				pr_err("hall_ic state switched to %d \n", state);
-			}
+			input_report_switch(input, SW_LID, state);
+			pr_err("hall_ic state switched to %d \n", state);
 		}
-#endif
 	}
 	input_sync(input);
 }
@@ -475,15 +463,6 @@ static int gpio_keys_setup_key(struct platform_device *pdev,
 						button->debounce_interval;
 		}
 
-#ifdef CONFIG_LGE_HALL_IC
-		if (!strncmp(bdata->button->desc, "hall_ic", 7)){
-			if (switch_dev_register(&hallic_sdev) < 0) {
-				pr_err("hallic_dev switch registration failed\n");
-				switch_dev_unregister(&hallic_sdev);
-			}
-			pr_err("hallic_dev switch registration success\n");
-		}
-#endif
 		irq = gpio_to_irq(button->gpio);
 		if (irq < 0) {
 			error = irq;
@@ -522,6 +501,7 @@ static int gpio_keys_setup_key(struct platform_device *pdev,
 	}
 
 	input_set_capability(input, button->type ?: EV_KEY, button->code);
+	input_set_capability(input, EV_SW, SW_LID);
 
 	/*
 	 * If platform has specified that the button can be disabled,
@@ -795,6 +775,8 @@ static int gpio_keys_probe(struct platform_device *pdev)
 	/* Enable auto repeat feature of Linux input subsystem */
 	if (pdata->rep)
 		__set_bit(EV_REP, input->evbit);
+
+	__set_bit(EV_SW, input->evbit);
 
 	/* Get pinctrl if target uses pinctrl */
 	ddata->key_pinctrl = devm_pinctrl_get(dev);
