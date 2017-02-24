@@ -15,6 +15,8 @@
 
 #include "../../qcom/msm8992.dtsi"
 #include "msm8992-pplus_att_us.dtsi"
+#include "msm8992-pplus_att_us-sensorhub.dtsi"
+#include "../msm8992-headset-amp-es9018.dtsi"
 
 / {
 	model = "Qualcomm Technologies, Inc. MSM8992 PPLUS ATT US";
@@ -34,13 +36,19 @@
 
 		max17050@36 {
 			status = "ok";
-			interrupts = <0x3f 0x0>;
-			max17048,alert_gpio = <&msm_gpio 0x3f 0x0>;
 		};
 	};
 
 	i2c_5: i2c@f9967000 {
 		ti-tas2552_41@41 {
+			status = "ok";
+		};
+
+		idtp9017@68 {
+			status = "ok";
+		};
+
+		es9018-codec@48 {
 			status = "ok";
 		};
 	};
@@ -58,6 +66,10 @@
 			status = "disabled";
 		};
 	};
+
+        earjack-debugger {
+                status = "ok";
+        };
 };
 
 &slim_msm {
@@ -83,5 +95,74 @@
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
+	};
+};
+
+&pm8994_gpios {
+
+	gpio@cc00 { /* GPIO 13 HIFI_LDO_SW */
+		status = "ok";
+	};
+
+	gpio@d200 { /* GPIO 19 HIFI_HPH_SW */
+		status = "ok";
+	};
+
+	gpio@d500 { /* GPIO 22 HIFI_RESET_N */
+		status = "ok";
+	};
+};
+
+&soc {
+    spi_10: spi@f9966000{
+        status = "ok";
+    };
+};
+
+&spi_10 {
+    mh1@0 {
+        status = "ok";
+		};
+    sensorhub@2 {
+        status = "ok";
+	contexthub,pre_reset_delay = <20>;
+    };
+};
+
+&rpm_bus {
+	rpm-regulator-ldoa19 {
+		pm8994_l19: regulator-l19 {
+			status = "ok";
+		};
+	};
+	rpm-regulator-ldoa31{
+		pm8994_l31: regulator-l31 {
+			status = "ok";
+		};
+	};
+};
+
+&cci {
+	eeprom1: qcom,eeprom_reva@a0 {
+		status = "ok";
+	};
+	lge,camera0_reva@34 {
+		status = "ok";
+	};
+	lge,camera2@6c {
+		qcom,csiphy-sd-index = <1>;
+		qcom,csid-sd-index = <1>;
+		status = "ok";
+	};
+};
+
+&i2c_2 {
+	lge,camera1@20 {
+		qcom,csiphy-sd-index = <2>;
+		qcom,csid-sd-index = <2>;
+		status = "ok";
+	};
+	mh1: qcom,mh1@3e {
+		status = "ok";
 	};
 };

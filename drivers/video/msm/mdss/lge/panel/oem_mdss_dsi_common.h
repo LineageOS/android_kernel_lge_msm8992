@@ -22,6 +22,9 @@
 #include <linux/of_device.h>
 #include <linux/of_device.h>
 #include <linux/kernel.h>
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+#include <soc/qcom/lge/board_lge.h>
+#endif
 
 #include "../../mdss_debug.h"
 #include "../../mdss_panel.h"
@@ -48,6 +51,31 @@ int mdss_dsi_panel_sre_apply(unsigned int enabled);
 #endif
 //LGE_UPDATE_E (june1014.lee@lge.com. 2015.03.04). SRE
 
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+enum mode_change_cmd {
+	LGE_PANEL_NOT_SUPPORTED_SWITCH = -1,
+	LGE_PANEL_CMD_U2_TO_U1 = 0,
+	LGE_PANEL_CMD_U3_TO_U1,
+	LGE_PANEL_CMD_U1_TO_U2,
+	LGE_PANEL_CMD_U3_TO_U2,
+	LGE_PANEL_CMD_U1_TO_U3,
+	LGE_PANEL_CMD_U2_TO_U3,
+	LGE_PANEL_CMD_U3_READY,
+	LGE_PANEL_CMD_PROXIMITY_U2_TO_U3,
+	LGE_PANEL_CMD_PROXIMITY_U3_TO_U2,
+	LGE_PANEL_CMD_CHANGE_NUM,
+	LGE_PANEL_CMD_NONE
+};
+enum img_tune_mode {
+	LGE_PANEL_SH_ON = 0,
+	LGE_PANEL_CE_ON,
+	LGE_PANEL_IMG_TUNE_NUM
+};
+#endif
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+#define MAX_LEN_OF_PROPNAME	64
+#endif
 #define XLOG_DEFAULT_PANIC 0
 #define XLOG_DEFAULT_REGDUMP_ENABLE 0
 
@@ -76,6 +104,8 @@ struct lge_pan_data {
 	struct notifier_block notif;
 	struct dsi_panel_cmds clk_on_cmds;
 	struct dsi_panel_cmds clk_off_cmds;
+	struct dsi_panel_cmds rsp_nvm_write;
+	bool do_rsp_nvm_write;
 };
 
 #define MAX_PANEL_ID_LEN 64

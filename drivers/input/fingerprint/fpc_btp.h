@@ -14,8 +14,8 @@ struct fpc_btp_platform_data {
 	int irq_gpio;
 	int reset_gpio;
 	int cs_gpio;
-	int external_supply_mv; /* todo */
 	int qup_id;
+	struct regulator *vreg;
 };
 
 #endif

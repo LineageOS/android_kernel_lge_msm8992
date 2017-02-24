@@ -119,8 +119,10 @@
 	};
 
 	i2c@f9923000 { /* BLSP1 : BLSP1 QUP1 */
+		status = "ok";
+
 		smb1351-charger@1d {
-			status = "disabled";
+			status = "ok";
 			compatible = "qcom,smb1351-charger";
 			reg = <0x1d>;
 			qcom,parallel-charger;
@@ -133,8 +135,8 @@
 			status = "disabled";
 			compatible = "maxim,max17048";
 			interrupt-parent = <&msm_gpio>;
-			interrupts = <0x4c 0x0>;
-			max17048,alert_gpio = <&msm_gpio 0x4c 0x0>;
+			interrupts = <0x3f 0x0>;
+			max17048,alert_gpio = <&msm_gpio 0x3f 0x0>;
 			max17048,rcomp = <48>;
 			max17048,temp_co_hot = <275>;
 			max17048,temp_co_cold = <4263>;
@@ -145,14 +147,88 @@
 		};
 
 		max17050@36 {
-			status = "disabled";
+			status = "ok";
 			compatible = "maxim,max17050";
-			interrupt-parent = <&msm_gpio>;
-			interrupts = <0x4c 0x0>;
-			max17050,alert_gpio = <&msm_gpio 0x4c 0x0>;
-			max17050,alert_threshold = <0x2>;
 			max17050,full_design = <0xbb8>;
 			reg = <0x36>;
+
+			max17050,rsns-microohm = <10000>;
+
+			max17050,full-soc = <100>;
+			max17050,empty-soc = <0>;
+
+			/* LGC cell */
+			max17050,model_80_l = [10 7D D0 AC 60 B6 00 B8
+					B0 BA E0 BB 10 BD E0 BD
+					60 BF 60 C3 30 C6 E0 CA
+					B0 CE 20 D2 D0 D5 90 DA];
+
+			max17050,model_90_l = [30 00 10 02 00 10 00 09
+					40 16 20 1A 00 1C E0 15
+					B0 0A 60 08 10 08 E0 07
+					C0 04 B0 08 F0 05 F0 05];
+
+			max17050,model_A0_l = [00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02];
+
+			max17050,rcomp0_l = <0x003B>;
+			max17050,tempco_l = <0x192C>;
+			max17050,ichgterm_l = <0x0280>;
+			max17050,vempty_l = <0xA05F>;
+			max17050,qrtable00_l = <0x4385>;
+			max17050,qrtable10_l = <0x2382>;
+			max17050,qrtable20_l = <0x1281>;
+			max17050,qrtable30_l = <0x0D01>;
+			max17050,capacity_l = <0x16AC>;
+			max17050,vf_fullcap_l = <0x16AC>;
+			max17050,iavg_empty_l = <0x1223>;
+			max17050,rescale_factor_l = <0>;
+			max17050,rescale_soc_l = <9400>;
+
+			/* Tocad */
+			max17050,model_80_t = [00 7D D0 AA B0 B0 80 B6
+					D0 B8 30 BB B0 BC 90 BD
+					50 C0 B0 C1 70 C4 40 C6
+					30 C8 50 CD 90 D3 E0 D9];
+
+			max17050,model_90_t = [20 00 F0 01 50 02 10 0B
+					00 0C 00 18 F0 29 00 0A
+					60 1E A0 05 E0 08 A0 09
+					F0 07 F0 06 E0 05 E0 05];
+
+			max17050,model_A0_t = [00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02];
+
+			max17050,rcomp0_t = <0x003F>;
+			max17050,tempco_t = <0x2023>;
+			max17050,ichgterm_t = <0x0280>;
+			max17050,vempty_t = <0xA05F>;
+			max17050,qrtable00_t = <0x4600>;
+			max17050,qrtable10_t = <0x2200>;
+			max17050,qrtable20_t = <0x1000>;
+			max17050,qrtable30_t = <0x0A82>;
+			max17050,capacity_t = <0x1667>;
+			max17050,vf_fullcap_t = <0x1667>;
+			max17050,iavg_empty_t = <0x11EC>;
+			max17050,rescale_factor_t = <0>;
+			max17050,rescale_soc_t = <9400>;
+
+			/* Common */
+			max17050,config = <0x2100>;
+			max17050,relaxcfg = <0x506B>;
+			max17050,filtercfg = <0x87A4>;
+			max17050,learncfg = <0x2603>;
+			max17050,misccfg = <0x0870>;
+			max17050,fullsocthr = <0x6200>;
+			max17050,tempnom = <0x1400>;
+			max17050,tgain = <0xE932>;
+			max17050,toff = <0x2381>;
+
+			max17050,param-version = <0x1>;
 		};
 	};
 
@@ -160,7 +236,7 @@
 		status = "ok";
 
 		smb1358-charger@1c {
-			status = "ok";
+			status = "disabled";
 			compatible = "qcom,smb1358-charger";
 			reg = <0x1c>;
 			qcom,parallel-charger;
@@ -186,36 +262,93 @@
 		};
 
 		max17050@36 {
-			status = "ok";
+			status = "disabled";
 			compatible = "maxim,max17050";
-			interrupt-parent = <&msm_gpio>;
-			interrupts = <0x4c 0x0>;
-			max17050,alert_gpio = <&msm_gpio 0x4c 0x0>;
-			max17050,alert_threshold = <0x2>;
 			max17050,full_design = <0xbb8>;
 			reg = <0x36>;
+
+			max17050,rsns-microohm = <10000>;
+
+			max17050,full-soc = <100>;
+			max17050,empty-soc = <0>;
+
+			/* LGC cell */
+			max17050,model_80_l = [10 7D D0 AC 60 B6 00 B8
+					B0 BA E0 BB 10 BD E0 BD
+					60 BF 60 C3 30 C6 E0 CA
+					B0 CE 20 D2 D0 D5 90 DA];
+
+			max17050,model_90_l = [30 00 10 02 00 10 00 09
+					40 16 20 1A 00 1C E0 15
+					B0 0A 60 08 10 08 E0 07
+					C0 04 B0 08 F0 05 F0 05];
+
+			max17050,model_A0_l = [00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02];
+
+			max17050,rcomp0_l = <0x003B>;
+			max17050,tempco_l = <0x192C>;
+			max17050,ichgterm_l = <0x0280>;
+			max17050,vempty_l = <0xA05F>;
+			max17050,qrtable00_l = <0x4385>;
+			max17050,qrtable10_l = <0x2382>;
+			max17050,qrtable20_l = <0x1281>;
+			max17050,qrtable30_l = <0x0D01>;
+			max17050,capacity_l = <0x16AC>;
+			max17050,vf_fullcap_l = <0x16AC>;
+			max17050,iavg_empty_l = <0x1223>;
+			max17050,rescale_factor_l = <0>;
+			max17050,rescale_soc_l = <9400>;
+
+			/* Tocad */
+			max17050,model_80_t = [00 7D D0 AA B0 B0 80 B6
+					D0 B8 30 BB B0 BC 90 BD
+					50 C0 B0 C1 70 C4 40 C6
+					30 C8 50 CD 90 D3 E0 D9];
+
+			max17050,model_90_t = [20 00 F0 01 50 02 10 0B
+					00 0C 00 18 F0 29 00 0A
+					60 1E A0 05 E0 08 A0 09
+					F0 07 F0 06 E0 05 E0 05];
+
+			max17050,model_A0_t = [00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02
+					00 02 00 02 00 02 00 02];
+
+			max17050,rcomp0_t = <0x003F>;
+			max17050,tempco_t = <0x2023>;
+			max17050,ichgterm_t = <0x0280>;
+			max17050,vempty_t = <0xA05F>;
+			max17050,qrtable00_t = <0x4600>;
+			max17050,qrtable10_t = <0x2200>;
+			max17050,qrtable20_t = <0x1000>;
+			max17050,qrtable30_t = <0x0A82>;
+			max17050,capacity_t = <0x1667>;
+			max17050,vf_fullcap_t = <0x1667>;
+			max17050,iavg_empty_t = <0x11EC>;
+			max17050,rescale_factor_t = <0>;
+			max17050,rescale_soc_t = <9400>;
+
+			/* Common */
+			max17050,config = <0x2100>;
+			max17050,relaxcfg = <0x506B>;
+			max17050,filtercfg = <0x87A4>;
+			max17050,learncfg = <0x2603>;
+			max17050,misccfg = <0x0870>;
+			max17050,fullsocthr = <0x6200>;
+			max17050,tempnom = <0x1400>;
+			max17050,tgain = <0xE932>;
+			max17050,toff = <0x2381>;
+
+			max17050,param-version = <0x1>;
 		};
 	};
-
 };
 
 &soc {
-	charger_controller: charger_controller {
-		status = "ok";
-		lge,chargercontroller-current-ibat-max = <2000>;
-		lge,chargercontroller-current-ibat-lcd_off = <3000>;
-		lge,chargercontroller-current-limit = <450>;
-		lge,chargercontroller-current-wlc-limit = <500>;
-		lge,chargercontroller-current-ibat-max-wireless = <1200>;
-		lge,chargercontroller-current-iusb-factory = <1500>;
-		lge,chargercontroller-current-ibat-factory = <500>;
-		lge,fuelgauge-psy-name = "fuelgauge";
-		lge,chargercontroller-iusb-qc20 = <1800 1800>;
-		lge,chargercontroller-ibat-qc20 = <3000 3000>;
-		lge,chargercontroller-iusb-evp = <1800 1400>;
-		lge,chargercontroller-ibat-evp = <2000 1400>;
-	};
-
 	lge,unified_wlc{
 		status = "ok";
 	};
@@ -251,20 +384,23 @@
 			"charger", "ac_online", "NULL",
 			"charger", "usb_online", "/sys/class/power_supply/usb/online",
 			"charger", "present", "/sys/class/power_supply/usb/present",
-			"charger", "wlc_online", "NULL",
+			"charger", "wlc_online", "/sys/class/power_supply/wireless/online",
 			"charger", "type", "/sys/class/power_supply/usb/type",
-			"charger", "time_out", "NULL",
+			"charger", "time_out", "/sys/class/power_supply/battery/safety_timer_enabled",
 			"charger", "charging_enabled", "/sys/class/power_supply/battery/charging_enabled",
 			"charger", "ibat_current", "/sys/class/power_supply/battery/current_now",
 			"charger", "ichg_current", "/sys/class/power_supply/usb/current_max",
 			"charger", "iusb_control", "NULL",
 			"charger", "thermal_mitigation", "/sys/class/power_supply/battery/system_temp_level",
-			"charger", "wlc_thermal_mitigation", "NULL",
+			"charger", "wlc_thermal_mitigation", "/sys/module/charger_controller/parameters/cc_wireless_limit",
 			"charger", "usb_parallel_chg_status", "/sys/class/power_supply/usb-parallel/status",
 			"charger", "usb_parallel_charging_enabled", "/sys/class/power_supply/usb-parallel/charging_enabled",
 			/* LCD Backlight */
 			"lcd", "brightness", "/sys/class/leds/lcd-backlight/brightness",
 			"lcd", "max_brightness", "/sys/class/leds/lcd-backlight/max_brightness",
+			/* LCD Backlight EX */
+			"lcd_ex", "brightness", "/sys/class/leds/lcd-backlight-ex/brightness",
+			"lcd_ex", "max_brightness", "/sys/class/leds/lcd-backlight-ex/max_brightness",
 			/* KEY LED */
 			"key_led", "red_brightness", "/sys/class/leds/red/brightness",
 			"key_led", "green_brightness", "/sys/class/leds/green/brightness",

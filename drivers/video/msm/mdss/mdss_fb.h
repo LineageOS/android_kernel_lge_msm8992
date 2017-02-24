@@ -223,6 +223,7 @@ struct msm_mdp_interface {
 	int (*stop_histogram)(struct msm_fb_data_type *mfd);
 	int (*ad_calc_bl)(struct msm_fb_data_type *mfd, int bl_in,
 		int *bl_out, bool *bl_out_notify);
+	int (*ad_work_setup)(struct msm_fb_data_type *mfd);
 	int (*ad_shutdown_cleanup)(struct msm_fb_data_type *mfd);
 	int (*panel_register_done)(struct mdss_panel_data *pdata);
 	u32 (*fb_stride)(u32 fb_index, u32 xres, int bpp);
@@ -257,6 +258,16 @@ struct msm_fb_backup_type {
 	struct fb_info info;
 	struct mdp_display_commit disp_commit;
 };
+
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+struct msm_fb_ad_info {
+    int is_ad_on;
+    int user_bl_lvl;
+    int ad_weight;
+    int old_ad_brightness;
+};
+#endif
+
 
 struct msm_fb_data_type {
 	u32 key;
@@ -365,7 +376,12 @@ struct msm_fb_data_type {
 
 #if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
 	int aod;
-	int fake_u2;
+	int ignore_aod;
+	int fakeu2;
+	int fakeu3;
+#endif
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+    struct msm_fb_ad_info ad_info;
 #endif
 };
 

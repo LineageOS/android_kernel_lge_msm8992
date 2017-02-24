@@ -65,5 +65,11 @@
 	};
 };
 
+&slim_msm {
+        tomtom_codec {
+                qcom,cdc-dmic-sample-rate = <2400000>;
+        };
+};
+
 #include "../msm8992-amp-ti-tas2552.dtsi"
 

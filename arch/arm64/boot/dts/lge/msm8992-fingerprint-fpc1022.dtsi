@@ -47,7 +47,7 @@
 			interrupt-names = "spi_irq", "spi_bam_irq";
 			interrupts = <0 106 0>, <0 239 0>;
 
-			spi-max-frequency = <5000000>; /* TODO */
+			spi-max-frequency = <4800000>; /* TODO */
 			qcom,master-id = <84>;
 
 			clock-names = "iface_clk", "core_clk";
@@ -94,7 +94,7 @@
 			interrupt-names = "spi_irq", "spi_bam_irq";
 			interrupts = <0 104 0>, <0 239 0>;
 
-			spi-max-frequency = <5000000>; /* TODO */
+			spi-max-frequency = <4800000>; /* TODO */
 			qcom,master-id = <84>;
 
 			clock-names = "iface_clk", "core_clk";
@@ -136,7 +136,7 @@
 		reg = <0>;
 		interrupt-parent = <&msm_gpio>;
 		interrupts = <36 0x0>;
-		spi-max-frequency = <5000000>;
+		spi-max-frequency = <4800000>;
 
 		qcom,qup-id = <12>;
 
@@ -158,7 +158,8 @@
 
 		fpc,gpio_irq	=  <&msm_gpio 36 0x00>;
 		fpc,gpio_reset	= <&msm_gpio 38 0x00>;
-		fpc,gpio_cs	= <&msm_gpio 55 0x00>;
+		fpc,gpio_cs	= <&msm_gpio 87 0x00>;
+		fpc,vddio-supply = <&pm8994_l12>;
 	};
 };
 
@@ -169,7 +170,7 @@
 		reg = <0>;
 		interrupt-parent = <&msm_gpio>;
 		interrupts = <36 0x0>;
-		spi-max-frequency = <5000000>;
+		spi-max-frequency = <4800000>;
 
 		qcom,qup-id = <10>;
 
@@ -192,5 +193,6 @@
 		fpc,gpio_irq	=  <&msm_gpio 36 0x00>;
 		fpc,gpio_reset	= <&msm_gpio 38 0x00>;
 		fpc,gpio_cs	= <&msm_gpio 55 0x00>;
+		fpc,vddio-supply = <&pm8994_l12>;
 	};
 };

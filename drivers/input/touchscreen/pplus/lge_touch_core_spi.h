@@ -222,6 +222,8 @@ struct touch_platform_data {
 	u32 fw_pid_addr_list[4];
 	u8 swipe_stat[2];
 	u8 swipe_pwr_ctr;
+	u8 skip_reset;
+	u8 is_u3fake;
 	int lockscreen_stat;
 };
 
@@ -328,7 +330,9 @@ struct state_info {
 	atomic_t rebase;
 	atomic_t incoming_call;
 	atomic_t crack_test;
+	atomic_t config_block;
 	atomic_t need_font_downoload;
+	atomic_t touch_ta_status;
 };
 
 struct point {

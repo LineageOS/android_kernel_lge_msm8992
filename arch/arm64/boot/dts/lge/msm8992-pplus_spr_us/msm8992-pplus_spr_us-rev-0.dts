@@ -34,8 +34,6 @@
 
 		max17050@36 {
 			status = "ok";
-			interrupts = <0x3f 0x0>;
-			max17048,alert_gpio = <&msm_gpio 0x3f 0x0>;
 		};
 	};
 
@@ -58,6 +56,10 @@
 			status = "disabled";
 		};
 	};
+
+        earjack-debugger {
+                status = "ok";
+        };
 };
 
 &slim_msm {

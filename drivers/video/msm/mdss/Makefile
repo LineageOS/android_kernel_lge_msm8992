@@ -6,15 +6,22 @@ mdss-mdp3-objs = mdp3.o mdp3_dma.o mdp3_ctrl.o dsi_status_v2.o
 mdss-mdp3-objs += mdp3_ppp.o mdp3_ppp_hwio.o mdp3_ppp_data.o
 obj-$(CONFIG_FB_MSM_MDSS_MDP3) += mdss-mdp3.o
 
-mdss-mdp-objs := mdss_mdp.o mdss_mdp_ctl.o mdss_mdp_pipe.o mdss_mdp_util.o dsi_status_6g.o
-mdss-mdp-objs += mdss_mdp_pp.o mdss_mdp_pp_debug.o
+mdss-mdp-objs :=  mdss_mdp_pipe.o mdss_mdp_util.o dsi_status_6g.o
 mdss-mdp-objs += mdss_mdp_intf_video.o
 mdss-mdp-objs += mdss_mdp_intf_cmd.o
 mdss-mdp-objs += mdss_mdp_intf_writeback.o
 mdss-mdp-objs += mdss_mdp_rotator.o
-mdss-mdp-objs += mdss_mdp_overlay.o
 mdss-mdp-objs += mdss_mdp_splash_logo.o
 mdss-mdp-objs += mdss_mdp_wb.o
+ifeq ($(CONFIG_MACH_MSM8992_PPLUS),y)
+mdss-mdp-objs += pplus/mdss_mdp_ctl.o pplus/mdss_mdp.o 
+mdss-mdp-objs += pplus/mdss_mdp_overlay.o
+mdss-mdp-objs += mdss_mdp_pp.o mdss_mdp_pp_debug.o
+else
+mdss-mdp-objs += mdss_mdp_ctl.o mdss_mdp.o 
+mdss-mdp-objs += mdss_mdp_overlay.o
+mdss-mdp-objs += mdss_mdp_pp.o mdss_mdp_pp_debug.o
+endif
 obj-$(CONFIG_FB_MSM_MDSS) += mdss-mdp.o
 obj-$(CONFIG_FB_MSM_MDSS) += mdss_mdp_debug.o
 
@@ -44,15 +51,25 @@ obj-$(CONFIG_FB_MSM_MDSS_HDMI_PANEL) += mdss_hdmi_cec.o
 obj-$(CONFIG_FB_MSM_MDSS_HDMI_MHL_SII8334) += mhl_sii8334.o mhl_msc.o
 
 obj-$(CONFIG_FB_MSM_MDSS_WRITEBACK) += mdss_wb.o
-
+ifeq ($(CONFIG_MACH_MSM8992_PPLUS),y)
+mdss-qpic-objs := pplus/mdss_qpic.o pplus/mdss_fb.o pplus/mdss_qpic_panel.o
+else
 mdss-qpic-objs := mdss_qpic.o mdss_fb.o mdss_qpic_panel.o
+endif
 obj-$(CONFIG_FB_MSM_QPIC) += mdss-qpic.o
 obj-$(CONFIG_FB_MSM_QPIC_ILI_QVGA_PANEL) += qpic_panel_ili_qvga.o
-
+ifeq ($(CONFIG_MACH_MSM8992_PPLUS),y)
+obj-$(CONFIG_FB_MSM_MDSS) += pplus/mdss_fb.o pplus/mdss_util.o
+else
 obj-$(CONFIG_FB_MSM_MDSS) += mdss_fb.o mdss_util.o
+endif
 obj-$(CONFIG_COMPAT) += mdss_compat_utils.o
 
+ifeq ($(CONFIG_MACH_MSM8992_PPLUS),y)
+lge-display-mdss-objs += lge/panel/pplus/oem_mdss_dsi_common.o lge/panel/pplus/oem_mdss_dsi.o lge/panel/pplus/oem_mdss_dsi_panel.o lge/panel/pplus/oem_mdss_dsi_host.o lge/panel/pplus/oem_mdss_mdp_overlay.o lge/panel/pplus/oem_mdss_debug_xlog.o
+else 
 lge-display-mdss-objs += lge/panel/oem_mdss_dsi_common.o lge/panel/oem_mdss_dsi.o lge/panel/oem_mdss_dsi_panel.o lge/panel/oem_mdss_dsi_host.o lge/panel/oem_mdss_mdp_overlay.o lge/panel/oem_mdss_debug_xlog.o
+endif
 
 ifeq ($(CONFIG_LGE_DISPLAY_TUNING),y)
 lge-display-mdss-objs += lge/common/lge_lcd_misc_ctrl.o

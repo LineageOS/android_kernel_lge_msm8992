@@ -99,6 +99,7 @@ module_param_named(time_debug_mask,
 		touch_time_debug_mask, int, S_IRUGO|S_IWUSR|S_IWGRP);
 #endif
 
+extern void tci_deep_sleep(struct spi_device *spi, int value);
 void touch_enable_irq(unsigned int irq)
 {
 	if (!touch_irq_mask) {
@@ -1314,9 +1315,16 @@ int touch_ic_init(struct lge_touch_data *ts, int is_error)
 		queue_delayed_work(touch_wq, &ts->work_ime_drumming,
 				msecs_to_jiffies(10));
 	}
-	if ( atomic_read(&ts->state.need_font_downoload) == DOWNLOAD_NEED )
-		queue_delayed_work(touch_wq,&ts->work_font_download, msecs_to_jiffies(0));
+	if (atomic_read(&ts->state.need_font_downoload) == DOWNLOAD_NEED) {
+		TOUCH_E("ts->pdata->mode.curr_mode : %d\n", ts->pdata->mode.curr_mode);
 
+		if (ts->pdata->mode.curr_mode == LCD_MODE_U3)
+			queue_delayed_work(touch_wq,&ts->work_font_download,
+			msecs_to_jiffies(0));
+		else
+			TOUCH_E("%s : current mode of lcd is U%d. skip download\n",
+			__func__, ts->pdata->mode.curr_mode);
+	}
 	atomic_set(&ts->state.device_init, INIT_DONE);
 	interrupt_control(ts, INTERRUPT_ENABLE);
 
@@ -1892,12 +1900,14 @@ struct state_info       *state;
 struct spi_device       *spi_device_only_for_update_status;
 void update_status(int code, int value)
 {
+	if (state == NULL)
+		return;
 	if (code == NOTIFY_TA_CONNECTION) {
-		if ((value == touch_ta_status) || (!boot_mode))
+		if ((value == atomic_read(&state->touch_ta_status)) || (!boot_mode))
 			return;
 		else
-			touch_ta_status = value;
-		TOUCH_D(DEBUG_BASE_INFO, "TA Type : %d\n", touch_ta_status);
+			atomic_set(&state->touch_ta_status, value);
+		TOUCH_D(DEBUG_BASE_INFO, "TA Type : %d\n", atomic_read(&state->touch_ta_status));
 		/* INVALID:0, SDP:1, DCP:2, CDP:3 PROPRIETARY:4 FLOATED:5*/
 
 		if (!is_probe || atomic_read(&state->pm) > PM_RESUME)
@@ -1935,7 +1945,7 @@ void update_status(int code, int value)
 		atomic_set(&state->hallic, value ?
 				HALL_COVERED : HALL_NONE);
 
-	if (atomic_read(&state->power) == POWER_ON)
+	if (atomic_read(&state->power) >  POWER_OFF)
 		touch_device_func->notify(spi_device_only_for_update_status,
 				(u8)code, value);
 
@@ -3100,7 +3110,26 @@ static ssize_t store_extwatch_onoff(struct spi_device *spi,
 
 	return count;
 }
+static ssize_t store_extwatch_block(struct spi_device *spi,
+		const char *buf, size_t count)
+{
+	struct lge_touch_data *ts = spi_get_drvdata(spi);
+	u8 value;
+	u8 zero = '0';
 
+	memcpy( &value, buf, sizeof(u8));
+
+	if ( value == NO_ACTION || value == zero)
+		value = 0x00;
+	else
+		value = 0x01;
+
+	atomic_set(&ts->state.config_block, value);
+	TOUCH_I("%s : %s\n", __func__,
+			value ? "Block" : "Open");
+
+	return count;
+}
 static ssize_t store_extwatch_fontonoff(struct spi_device *spi,
 		const char *buf, size_t count)
 {
@@ -3108,6 +3137,9 @@ static ssize_t store_extwatch_fontonoff(struct spi_device *spi,
 	enum error_type ret = NO_ERROR;
 	u8 value;
 	u8 zero = '0';
+
+	if ( atomic_read(&ts->state.config_block) )
+		return count;
 
 	memcpy( (char *)&value, buf, sizeof(u8));
 
@@ -3226,6 +3258,9 @@ static ssize_t store_extwatch_fonteffect_config(struct spi_device *spi,
 	struct ExtWatchFontEffectConfig cfg;
 	char period[8] = {0};
 
+	if ( atomic_read(&ts->state.config_block) )
+		return count;
+
 	memcpy ( (char *)&cfg, buf, sizeof(struct ExtWatchFontEffectConfig) );
 
 	ts->ext_wdata.position.h24_en = cfg.h24_en;
@@ -3252,16 +3287,14 @@ static ssize_t store_extwatch_fonteffect_config(struct spi_device *spi,
 			break;
 	}
 
-	TOUCH_I("%s : 24h mode %s, Zero Dispaly %s, %s Type \n", __func__,
+	TOUCH_I("%s : 24h mode %s, Zero Dispaly %s, %s Type \
+		Blink area [%d , %d] Period %s \
+		Watch On/Off : %s\n", __func__,
 		cfg.h24_en ? "Enable" : "Disable",
 		cfg.zero_disp ? "Enable" : "Disable",
-		cfg.clock_disp_type ? "MM:SS" : "HH:MM");
-
-	TOUCH_I("%s : Blink area [%d , %d] Period %s\n",
-		__func__, cfg.blink.bstartx, cfg.blink.bendx, period);
-
-	TOUCH_I("%s : Watch On/Off : %s\n",
-		__func__, ts->ext_wdata.time.disp_waton ? "On" : "Off");
+		cfg.clock_disp_type ? "MM:SS" : "HH:MM",
+		cfg.blink.bstartx, cfg.blink.bendx, period,
+		ts->ext_wdata.time.disp_waton ? "On" : "Off");
 
 	return count;
 }
@@ -3273,6 +3306,9 @@ static ssize_t store_extwatch_fontproperty_config(struct spi_device *spi,
 	int idx =0;
 	char log[256] = {0};
 	int len = 0;
+
+	if ( atomic_read(&ts->state.config_block) )
+		return count;
 
 	memcpy ( ( char *)&cfg, buf, sizeof(struct ExtWatchFontPropertyConfig) );
 
@@ -3299,6 +3335,9 @@ static ssize_t store_extwatch_fontposition_config(struct spi_device *spi,
 	struct lge_touch_data *ts = spi_get_drvdata(spi);
 	struct ExtWatchFontPostionConfig cfg;
 
+	if ( atomic_read(&ts->state.config_block) )
+		return count;
+
 	memcpy ( (char *)&cfg, buf, sizeof(struct ExtWatchFontPostionConfig) );
 
 	ts->ext_wdata.mode.watch_area.watstartx = cfg.watstartx;
@@ -3322,6 +3361,9 @@ static ssize_t store_extwatch_timesync_config(struct spi_device *spi,
 	struct lge_touch_data *ts = spi_get_drvdata(spi);
 	struct ExtWatchTimeSyncConfig cfg;
 	enum error_type ret = NO_ERROR;
+
+	if ( atomic_read(&ts->state.config_block) )
+		return count;
 
 	memcpy ( ( char *)&cfg, buf, sizeof(struct ExtWatchTimeSyncConfig) );
 
@@ -3380,6 +3422,23 @@ ext_watch_kobj,
 		struct lge_touch_data, ext_watch_kobj);
 	ssize_t retval = -EFAULT;
 
+	if ( atomic_read(&ts->state.config_block) )
+		return count;
+
+	if ( buf == NULL ) {
+		TOUCH_E("%s buf is NULL\n", __func__);
+		goto finish;
+	}
+	if ( ts->ext_wdata.font_data == NULL ) {
+		TOUCH_E("%s font_data is NULL\n", __func__);
+		goto finish;
+	}
+	if ( off + count > FONT_DATA_SIZE )	{
+		TOUCH_E("%s off + count[%d] is bigger than FONT_DATA_SIZE\n"
+			,__func__, (int)off+(int)count);
+		goto finish;
+	}
+
 	ts->font_written_size = off + count;
 
 	if (count == 0 && off + count >= ts->font_access_size) {
@@ -3396,7 +3455,7 @@ ext_watch_kobj,
 			TOUCH_I("%s size error offset[%d] size[%d] \n", __func__,
 				(int)off, (int)count);
 	}
-
+finish:
 	return retval;
 }
 static int extwatch_font_access_init(struct lge_touch_data *ts)
@@ -3477,6 +3536,8 @@ static struct attribute *lge_touch_attribute_list[] = {
 
 static LGE_TOUCH_ATTR(watch_onoff, S_IRUGO | S_IWUSR,
 NULL, store_extwatch_onoff);
+static LGE_TOUCH_ATTR(block, S_IRUGO | S_IWUSR,
+NULL, store_extwatch_block);
 static LGE_TOUCH_ATTR(config_fontonoff, S_IRUGO | S_IWUSR,
 NULL, store_extwatch_fontonoff);
 static LGE_TOUCH_ATTR(config_fonteffect, S_IRUGO | S_IWUSR,
@@ -3505,6 +3566,7 @@ show_extwatch_get_cfg, NULL);
 
 static struct attribute *ext_watch_attribute_list[] = {
 	&lge_touch_attr_watch_onoff.attr,
+	&lge_touch_attr_block.attr,
 	&lge_touch_attr_config_fontonoff.attr,
 	&lge_touch_attr_config_fonteffect.attr,
 	&lge_touch_attr_config_fontproperty.attr,
@@ -4177,6 +4239,10 @@ static int touch_suspend(struct device *dev)
 	TOUCH_TRACE();
 	TOUCH_I("%s : touch_suspend start\n", __func__);
 
+	if (lge_get_boot_mode() == LGE_BOOT_MODE_CHARGERLOGO) {
+		//tci_deep_sleep(ts->spi_device, 1);
+		return 0;
+	}
 	cancel_delayed_work_sync(&ts->work_init);
 	cancel_delayed_work_sync(&ts->work_upgrade);
 	cancel_delayed_work_sync(&ts->work_trigger_handle);
@@ -4218,12 +4284,20 @@ static int touch_resume(struct device *dev)
 	TOUCH_TRACE();
 	TOUCH_I("%s : touch_resume start\n", __func__);
 
-	if (!boot_mode) {
+	if (lge_get_boot_mode() == LGE_BOOT_MODE_CHARGERLOGO) {
 		TOUCH_I("%s  : Ignore resume in Chargerlogo mode\n",
 				__func__);
+		tci_deep_sleep(ts->spi_device, 1);
 		return 0;
 	} else
 		TOUCH_I("%s : Normal mode\n", __func__);
+
+	if (ts->pdata->is_u3fake
+		&& ts->pdata->mode.curr_mode == LCD_MODE_U3) {
+		TOUCH_I("%s : Ignore resume in u3 fake mode \n", __func__);
+		ts->pdata->is_u3fake = 0;
+		return 0;
+	}
 
 	if (window_crack_check == CRACK) {
 		char *window_crack[2] = {"TOUCH_WINDOW_STATE=CRACK", NULL };
@@ -4253,11 +4327,12 @@ static int touch_resume(struct device *dev)
 	TOUCH_I("%s : touch_resume done\n", __func__);
 	mutex_unlock(&ts->pdata->thread_lock);
 
-	if (ts->pdata->swipe_pwr_ctr == SKIP_PWR_CON) {
-		TOUCH_I(
-				"%s : Initialize without booting_delay (swipe_pwr_ctr = %d)\n",
-				__func__, ts->pdata->swipe_pwr_ctr);
-		ts->pdata->swipe_pwr_ctr = WAIT_TOUCH_PRESS;
+	if (ts->pdata->swipe_pwr_ctr == SKIP_PWR_CON || 
+		ts->pdata->skip_reset) {
+		ts->pdata->skip_reset = 0;
+		TOUCH_I("%s : Initialize without booting_delay (skip_reset = %d)\n",
+				__func__, ts->pdata->skip_reset);
+		//ts->pdata->swipe_pwr_ctr = WAIT_TOUCH_PRESS;
 		booting_delay = 0;
 	} else {
 		booting_delay = ts->pdata->role->booting_delay;
@@ -4405,31 +4480,32 @@ static int lcd_notifier_callback(struct notifier_block *this,
 		mode = *(int *)(unsigned long)data;
 		ts->pdata->mode.prev_mode = ts->pdata->mode.curr_mode;
 		switch (mode) {
-			case LCD_MODE_U0:
+		case LCD_MODE_U0:
 			TOUCH_I("LCD_EVENT_LCD_MODE U0!\n");
 			ts->pdata->mode.curr_mode = LCD_MODE_U0;
 			break;
-			case LCD_MODE_U1:
+		case LCD_MODE_U1:
 			TOUCH_I("LCD_EVENT_LCD_MODE U1!\n");
 			ts->pdata->mode.curr_mode = LCD_MODE_U1;
-			if(ts->pdata->mode.prev_mode == LCD_MODE_U3)
-			{
+			if(ts->pdata->mode.prev_mode == LCD_MODE_U3) {
 				touch_device_func->touch_mode(ts->spi_device, LCD_MODE_U1);
 			}
 			break;
-			case LCD_MODE_U2:
+		case LCD_MODE_U2:
 			TOUCH_I("LCD_EVENT_LCD_MODE U2!\n");
 			ts->pdata->mode.curr_mode = LCD_MODE_U2;
 			break;
-			case LCD_MODE_U3:
+		case LCD_MODE_U3:
 			TOUCH_I("LCD_EVENT_LCD_MODE U3!\n");
 			ts->pdata->mode.curr_mode = LCD_MODE_U3;
-			if(ts->pdata->mode.prev_mode == LCD_MODE_U1)
-			{
+			if(ts->pdata->mode.prev_mode == LCD_MODE_U1) {
 				touch_device_func->touch_mode(ts->spi_device, LCD_MODE_U3);
 			}
+			if(ts->pdata->mode.prev_mode == LCD_MODE_U2) {
+				ts->pdata->skip_reset = 1;
+			}
 			break;
-			default:
+		default:
 			break;
 		}
 		break;
@@ -4455,7 +4531,7 @@ void touch_swipe_status(struct spi_device *spi, int mode)
 				(void *)&mode);
 }
 
-static int touch_probe(struct spi_device *spi)
+static int touch_probe_normal(struct spi_device *spi)
 {
 	struct lge_touch_data *ts;
 	int ret = -ENOMEM;
@@ -4729,6 +4805,100 @@ error:
 	return ret;
 }
 
+static int touch_probe_charger(struct spi_device *spi)
+{
+	struct lge_touch_data *ts;
+	int ret = -ENOMEM;
+
+	TOUCH_TRACE();
+	TOUCH_I("charger touch_probe start\n");
+
+	ts = devm_kzalloc(&spi->dev,
+				sizeof(struct lge_touch_data), GFP_KERNEL);
+
+	get_platform_data(&ts->pdata, spi);
+
+	spi_set_drvdata(spi, ts);
+	ts->spi_device = spi;
+
+	if (ts->pdata->reset_pin > 0) {
+		gpio_request(ts->pdata->reset_pin,
+					"touch_reset");
+		gpio_direction_output(ts->pdata->reset_pin, 1);
+	}
+
+	if (ts->pdata->int_pin > 0) {
+		gpio_request(ts->pdata->int_pin,
+					"touch_int");
+		gpio_direction_input(ts->pdata->int_pin);
+	}
+
+	/* Get pinctrl if target uses pinctrl */
+	TOUCH_I("Start pinctrl\n");
+	ts->ts_pinctrl = devm_pinctrl_get(&(spi->dev));
+	if (IS_ERR(ts->ts_pinctrl)) {
+		if (PTR_ERR(ts->ts_pinctrl) == -EPROBE_DEFER) {
+			TOUCH_I("ts_pinctrl ==  -EPROBE_DEFER\n");
+			return -EPROBE_DEFER;
+		}
+		TOUCH_I(
+				"Target does not use pinctrl(ts->ts_pinctrl == NULL)\n"
+		       );
+		ts->ts_pinctrl = NULL;
+	}
+
+	if (ts->ts_pinctrl) {
+		ts->ts_pinset_state_active =
+			pinctrl_lookup_state(ts->ts_pinctrl, "pmx_ts_active");
+		if (IS_ERR(ts->ts_pinset_state_active))
+			TOUCH_E("cannot get ts pinctrl active state\n");
+
+		ts->ts_pinset_state_suspend =
+			pinctrl_lookup_state(ts->ts_pinctrl, "pmx_ts_suspend");
+		if (IS_ERR(ts->ts_pinset_state_suspend))
+			TOUCH_E("cannot get ts pinctrl active state\n");
+
+		if (ts->ts_pinset_state_active) {
+			ret = pinctrl_select_state(ts->ts_pinctrl,
+					ts->ts_pinset_state_active);
+			if (ret)
+				TOUCH_I(
+						"cannot set ts pinctrl active state\n"
+				       );
+		} else {
+			TOUCH_I("pinctrl active == NULL\n");
+		}
+	}
+	TOUCH_I("End pinctrl\n");
+	spi->bits_per_word = 8;
+	spi->mode = SPI_MODE_0;
+	spi->max_speed_hz = SPI_MAX_CLOCK_SPEED;
+	spi_setup(spi);
+	touch_device_func->probe(ts->spi_device, ts->pdata,
+				&ts->state);
+
+#if defined(CONFIG_HAS_EARLYSUSPEND)
+	ts->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
+	ts->early_suspend.suspend = touch_early_suspend;
+	ts->early_suspend.resume = touch_late_resume;
+	register_early_suspend(&ts->early_suspend);
+#elif defined(CONFIG_FB)
+	ts->fb_notif.notifier_call = fb_notifier_callback;
+	fb_register_client(&ts->fb_notif);
+#endif
+	ts_data = ts;
+	tci_deep_sleep(spi, 1);
+
+	return 0;
+}
+
+static int touch_probe(struct spi_device *spi)
+{
+	if (lge_get_boot_mode() == LGE_BOOT_MODE_CHARGERLOGO)
+		return touch_probe_charger(spi);
+
+	return touch_probe_normal(spi);
+}
 static int touch_remove(struct spi_device *spi)
 {
 	struct lge_touch_data *ts = spi_get_drvdata(spi);

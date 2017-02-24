@@ -43,25 +43,27 @@ static int ext_watch_set_mcs_ctrl(struct spi_device *spi, u8 enable)
 	else
 		mcs_value = 0xCA;
 
-	DO_SAFE(sic_spi_write(spi, EXT_WATCH_MCS_ACCESS, (u8 *)&mcs_value, sizeof(u8)), error);
-	//TOUCH_I("MCS Access onoff : %X  \n", mcs_value);
+	DO_SAFE(sic_spi_write(spi, EXT_WATCH_MCS_ACCESS, (u8 *)&mcs_value,
+		sizeof(u8)), error);
+	/* TOUCH_I("MCS Access onoff : %X\n", mcs_value); */
 	return NO_ERROR;
 error:
 	TOUCH_E("MCS Access Fail\n");
 	return ERROR;
 }
 
-enum error_type ext_watch_get_mode(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_get_mode(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
 	u8 *ptr = NULL;
 	u16 offset = EXT_WATCH_CTRL;
 	u16 idx = 0;
 	u32 size = sizeof(u8);
 
-	TOUCH_I("%s start \n", __func__);
+	TOUCH_I("%s start\n", __func__);
 
 	ext_watch_set_mcs_ctrl(spi, EXT_WATCH_MCS_ENABLE);
-	
+
 	ptr = (u8 *)(&cfg->mode.watch_ctrl);
 	offset = EXT_WATCH_CTRL;
 	DO_SAFE(sic_spi_read(spi,  offset++, &ptr[0], size), error);
@@ -102,100 +104,80 @@ enum error_type ext_watch_get_mode(struct spi_device *spi, struct ext_watch_cfg 
 		DO_SAFE(sic_spi_read(spi,  offset++, &ptr[0], size), error);
 		DO_SAFE(sic_spi_read(spi,  offset++, &ptr[1], size), error);
 		DO_SAFE(sic_spi_read(spi,  offset++, &ptr[2], size), error);
-		TOUCH_I("Get Offet[%X] LUT[%d] : B[%02X] G[%02X] R[%02X] \n",
-			offset - 3, idx, ptr[0],ptr[1],ptr[2]);
+		TOUCH_I("Get Offet[%X] LUT[%d] : B[%02X] G[%02X] R[%02X]\n",
+			offset - 3, idx, ptr[0], ptr[1], ptr[2]);
 	}
 
 	ext_watch_set_mcs_ctrl(spi, EXT_WATCH_MCS_DISABLE);
-	TOUCH_I("%s end \n", __func__);
+	TOUCH_I("%s end\n", __func__);
 	return NO_ERROR;
-	
+
 error:
-	TOUCH_I("%s failed \n", __func__);
+	TOUCH_I("%s failed\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_set_mode(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_set_mode(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
 	u8 *ptr = NULL;
 	u16 offset = EXT_WATCH_CTRL;
-	u16 idx = 0;
-	u32 size = sizeof(u8);
-
-	TOUCH_I("%s \n", __func__);
+	u32 size = sizeof(u32);
+	u32 pack[3] = {0, };
 
 	ext_watch_set_mcs_ctrl(spi, EXT_WATCH_MCS_ENABLE);
-	
+
 	ptr = (u8 *)(&cfg->mode.watch_ctrl);
 	offset = EXT_WATCH_CTRL;
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[0], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[1], size), error);
-	#if 0
-	TOUCH_I("Set Offet[%X] watch_ctrl %02X %02X\n",
-		EXT_WATCH_CTRL, ptr[0], ptr[1]);
-	#endif
+	pack[0] = ptr[0];
+	pack[1] = ptr[1];
+
+	DO_SAFE(sic_spi_write(spi,  offset, (u8 *)&pack[0],
+		size * 2), error);
 
 	ptr = (u8 *)(&cfg->mode.watch_area);
 	offset = EXT_WATCH_AREA;
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[0], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[1], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[2], size), error);
-	#if 0
-	TOUCH_I("Set Offet[%X] watch_area %02X %02X %02X\n",
-		EXT_WATCH_AREA, ptr[0], ptr[1], ptr[2]);
-	#endif
+	pack[0] = ptr[0];
+	pack[1] = ptr[1];
+	pack[2] = ptr[2];
+
+	DO_SAFE(sic_spi_write(spi,  offset, (u8 *)&pack[0],
+		size * 3), error);
 
 	ptr = (u8 *)(&cfg->mode.blink_area);
 	offset = EXT_WATCH_BLINK_AREA;
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[0], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[1], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[2], size), error);
-	#if 0
-	TOUCH_I("Set Offet[%X] blink_area %02X %02X %02X\n",
-		EXT_WATCH_BLINK_AREA, ptr[0], ptr[1], ptr[2]);
-	#endif
+	pack[0] = ptr[0];
+	pack[1] = ptr[1];
+	pack[2] = ptr[2];
+
+	DO_SAFE(sic_spi_write(spi,  offset, (u8 *)&pack[0],
+		size * 3), error);
 
 	ptr = (u8 *)(&cfg->mode.grad);
 	offset = EXT_WATCH_GRAD;
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[0], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[1], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[2], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[3], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[4], size), error);
-	DO_SAFE(sic_spi_write(spi,  offset++, &ptr[5], size), error);
-	#if 0
-	TOUCH_I("Set Offet[%X] grad %02X %02X %02X %02X %02X %02X\n",
-		EXT_WATCH_GRAD, ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]);
-	#endif
+	DO_SAFE(sic_spi_write(spi,  offset, &ptr[0], size * 6), error);
 
 	offset = EXT_WATCH_LUT;
-	for (idx = 0; idx < EXT_WATCH_LUT_NUM; idx++) {
-		ptr = (u8 *)(&cfg->mode.lut[idx]);
-		DO_SAFE(sic_spi_write(spi,  offset++, &ptr[0], size), error);
-		DO_SAFE(sic_spi_write(spi,  offset++, &ptr[1], size), error);
-		DO_SAFE(sic_spi_write(spi,  offset++, &ptr[2], size), error);
-		#if 0
-		TOUCH_I("Set Offet[%X] LUT[%d] : B[%02X] G[%02X] R[%02X] \n",
-			offset - 3, idx, ptr[0],ptr[1],ptr[2]);
-		#endif
-	}
+	ptr = (u8 *)(&cfg->mode.lut[0]);
+	DO_SAFE(sic_spi_write(spi,  offset, &ptr[0],
+		size * 3 * EXT_WATCH_LUT_NUM), error);
 
 	ext_watch_set_mcs_ctrl(spi, EXT_WATCH_MCS_DISABLE);
 	#if 0
-	TOUCH_I("%s end \n", __func__);
+	TOUCH_I("%s end\n", __func__);
 	#endif
 	return NO_ERROR;
-	
+
 error:
-	TOUCH_I("%s failed \n", __func__);
+	TOUCH_I("%s failed\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_set_current_time(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_set_current_time(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
 	u32 rtc_ctrl = EXT_WATCH_RTC_STOP;
 	u16 rtc_count = 305;		/* for time, 1 /rtc_ecnt */
-
 
 	cfg->time.rtc_ecnt = 32764;
 	cfg->time.rtc_sctcnt = (int)((cfg->time.rtc_sctcnt * rtc_count) / 10);
@@ -204,10 +186,7 @@ enum error_type ext_watch_set_current_time(struct spi_device *spi, struct ext_wa
 		(u8 *)&rtc_ctrl, sizeof(u32)), error);
 
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_RTC_SCT,
-		(u8 *)&cfg->time.rtc_sct, sizeof(u32)), error);
-
-	DO_SAFE(sic_spi_write(spi, EXT_WATCH_RTC_SCTCNT,
-		(u8 *)&cfg->time.rtc_sctcnt, sizeof(u32)), error);
+		(u8 *)&cfg->time.rtc_sct, sizeof(u32)*2), error);
 
 	rtc_ctrl = cfg->time.rtc_ecnt & 0xFFFF;
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_RTC_ECNT,
@@ -224,11 +203,12 @@ enum error_type ext_watch_set_current_time(struct spi_device *spi, struct ext_wa
 	return NO_ERROR;
 
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_get_current_time(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_get_current_time(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
 	DO_SAFE(sic_spi_read(spi, EXT_WATCH_RTC_CTST,
 		(u8 *)&cfg->time.rtc_ctst, sizeof(u32)), error);
@@ -239,73 +219,76 @@ enum error_type ext_watch_get_current_time(struct spi_device *spi, struct ext_wa
 	return NO_ERROR;
 
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_get_position(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_get_position(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
 	u8 *ptr = (u8 *)(&cfg->position);
 	struct ext_watch_status_cfg status_cfg;
 
-	TOUCH_I("%s start \n", __func__);
+	TOUCH_I("%s start\n", __func__);
 
-	DO_SAFE(sic_spi_read(spi, EXT_WATCH_POSITION_R, ptr, sizeof(u32) * 3), error);
-	TOUCH_I("Get Hour Position [%d][%d] \n",
+	DO_SAFE(sic_spi_read(spi, EXT_WATCH_POSITION_R,
+		ptr, sizeof(u32) * 3), error);
+	TOUCH_I("Get Hour Position [%d][%d]\n",
 		cfg->position.h10x_pos, cfg->position.h1x_pos);
-	TOUCH_I("Get Min Position [%d][%d] \n",
+	TOUCH_I("Get Min Position [%d][%d]\n",
 		cfg->position.m10x_pos, cfg->position.m1x_pos);
-	TOUCH_I("Get Colon Position [%d] \n", cfg->position.clx_pos);
+	TOUCH_I("Get Colon Position [%d]\n", cfg->position.clx_pos);
 
-	DO_SAFE(sic_spi_read(spi, EXT_WATCH_SATATE, (u8 *)&status_cfg, sizeof(u32)), error);
+	DO_SAFE(sic_spi_read(spi, EXT_WATCH_SATATE,
+		(u8 *)&status_cfg, sizeof(u32)), error);
 	cfg->position.zero_disp = status_cfg.zero_en;
 	cfg->position.h24_en = status_cfg.en_24;
 	cfg->position.clock_disp_mode = status_cfg.disp_mode;
 	cfg->position.bhprd = status_cfg.bhprd;
 
-	TOUCH_I("Get Zero Display [%d] \n", cfg->position.zero_disp);
-	TOUCH_I("Get 24H Mode [%d] \n", cfg->position.h24_en);
-	TOUCH_I("Get Clock Mode [%d] \n", cfg->position.clock_disp_mode);
-	TOUCH_I("Get Blink period [%d] \n", cfg->position.bhprd);
-	TOUCH_I("Get Current Watch[%d] \n", status_cfg.step);
-	TOUCH_I("Get Watch Enable[%d] \n", status_cfg.en);
+	TOUCH_I("Get Zero Display [%d]\n", cfg->position.zero_disp);
+	TOUCH_I("Get 24H Mode [%d]\n", cfg->position.h24_en);
+	TOUCH_I("Get Clock Mode [%d]\n", cfg->position.clock_disp_mode);
+	TOUCH_I("Get Blink period [%d]\n", cfg->position.bhprd);
+	TOUCH_I("Get Current Watch[%d]\n", status_cfg.step);
+	TOUCH_I("Get Watch Enable[%d]\n", status_cfg.en);
 
-	if ( cfg->position.clock_disp_mode )
-		TOUCH_I("Get Current Time[%02d][%02d] \n",
+	if (cfg->position.clock_disp_mode)
+		TOUCH_I("Get Current Time[%02d][%02d]\n",
 			status_cfg.cur_min, status_cfg.cur_sec);
 	else
-		TOUCH_I("Get Current Time[%02d][%02d][%03d] \n", status_cfg.cur_hour,
-			status_cfg.cur_min, cfg->time.rtc_sctcnt);
+		TOUCH_I("Get Current Time[%02d][%02d][%03d]\n",
+		status_cfg.cur_hour, status_cfg.cur_min, cfg->time.rtc_sctcnt);
 
 	return NO_ERROR;
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_set_position(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_set_position(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
-	u8 *ptr = (u8 *)(&cfg->position);	
+	u8 *ptr = (u8 *)(&cfg->position);
 
-	TOUCH_I("%s \n", __func__);
-
-	DO_SAFE(sic_spi_write(spi, EXT_WATCH_POSITION, ptr, sizeof(u32) * 5), error);
+	DO_SAFE(sic_spi_write(spi, EXT_WATCH_POSITION,
+		ptr, sizeof(u32) * 5), error);
 	#if 0
-	TOUCH_I("Set Hour Position [%d][%d] \n",
+	TOUCH_I("Set Hour Position [%d][%d]\n",
 		cfg->position.h10x_pos, cfg->position.h1x_pos);
-	TOUCH_I("Set Min Position [%d][%d] \n",
+	TOUCH_I("Set Min Position [%d][%d]\n",
 		cfg->position.m10x_pos, cfg->position.m1x_pos);
-	TOUCH_I("Set Colon Position [%d] \n", cfg->position.clx_pos);
-	TOUCH_I("Set Zero Display [%d] \n", cfg->position.zero_disp);
-	TOUCH_I("Set 24H Mode [%d] \n", cfg->position.h24_en);
-	TOUCH_I("Set Display Mode [%d] \n", cfg->position.clock_disp_mode);
-	TOUCH_I("Set Clock Mode [%d] \n", cfg->position.clock_disp_mode);
-	TOUCH_I("Set Blink period [%d] \n", cfg->position.bhprd);
+	TOUCH_I("Set Colon Position [%d]\n", cfg->position.clx_pos);
+	TOUCH_I("Set Zero Display [%d]\n", cfg->position.zero_disp);
+	TOUCH_I("Set 24H Mode [%d]\n", cfg->position.h24_en);
+	TOUCH_I("Set Display Mode [%d]\n", cfg->position.clock_disp_mode);
+	TOUCH_I("Set Clock Mode [%d]\n", cfg->position.clock_disp_mode);
+	TOUCH_I("Set Blink period [%d]\n", cfg->position.bhprd);
 	#endif
 
 	return NO_ERROR;
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 
@@ -317,9 +300,9 @@ error:
 enum error_type ext_watch_shutdown(struct spi_device *spi, u8 onoff)
 {
 	u32 rtc_ctrl = EXT_WATCH_RTC_STOP;
-	TOUCH_I("%s start \n", __func__ );
+	TOUCH_I("%s start\n", __func__);
 
-	if ( onoff == EXT_WATCH_RTC_START )
+	if (onoff == EXT_WATCH_RTC_START)
 		rtc_ctrl = EXT_WATCH_RTC_START;
 
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_RTC_RUN,
@@ -327,29 +310,28 @@ enum error_type ext_watch_shutdown(struct spi_device *spi, u8 onoff)
 
 	return NO_ERROR;
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 
 }
 
 /* ext_watch_set_onoff
  *
- * 'power state' can has only 'ON' or 'OFF'. (not 'SLEEP' or 'WAKE') 
+ *'power state' can has only 'ON' or 'OFF'. (not 'SLEEP' or 'WAKE')
  */
 enum error_type ext_watch_onoff(struct spi_device *spi, u32 onoff)
 {
-	TOUCH_I("%s %d\n", __func__, onoff);
-
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_RTC_CTRL,
 			(u8 *)&onoff, sizeof(u32)), error);
 
 	return NO_ERROR;
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_font_download(struct spi_device *spi, char *font_data)
+enum error_type ext_watch_font_download(struct spi_device *spi,
+	char *font_data)
 {
 	u32 font_sel = 0;
 	u32 font_data_offset = 0;
@@ -357,7 +339,7 @@ enum error_type ext_watch_font_download(struct spi_device *spi, char *font_data)
 	u32 size = 0;
 
 	TOUCH_I("%s start\n", __func__);
-	// Font memory access enable
+	/* Font memory access enable */
 	wdata = 1;
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_FONT_ACC_EN,
 		(u8 *)&wdata, sizeof(u32)), error);
@@ -365,19 +347,19 @@ enum error_type ext_watch_font_download(struct spi_device *spi, char *font_data)
 	size = sizeof(u32) * EXT_WATCH_FONT_NUM_SIZE;
 
 	for (font_sel = 0; font_sel < 10; font_sel++) {
-		// Font select : '0' ~ '9'
+		/* Font select : '0' ~ '9' */
 		font_data_offset = font_sel * size;
 		DO_SAFE(sic_spi_font_write(spi, (u8 *)&font_sel,
 			font_data+font_data_offset, size), error);
 	}
 
-	// Font select : ':'
+	/* Font select : ':' */
 	font_data_offset = font_sel * size;
 	size = sizeof(u32) * EXT_WATCH_FONT_CHAR_SIZE;
 	DO_SAFE(sic_spi_font_write(spi, (u8 *)&font_sel,
 		font_data+font_data_offset, size), error);
 
-	// Font memory access disable
+	/* Font memory access disable */
 	wdata = 0;
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_FONT_ACC_EN,
 		(u8 *)&wdata, sizeof(u32)), error);
@@ -390,7 +372,8 @@ error:
 	return ERROR;
 }
 
-enum error_type ext_watch_font_dump(struct spi_device *spi, char *font_dump)
+enum error_type ext_watch_font_dump(struct spi_device *spi,
+	char *font_dump)
 {
 	u32 font_sel = 0;
 	u32 font_data_offset = 0;
@@ -398,7 +381,7 @@ enum error_type ext_watch_font_dump(struct spi_device *spi, char *font_dump)
 	u32 size = 0;
 
 	TOUCH_I("%s start\n", __func__);
-	// Font memory access enable
+	/* Font memory access enable */
 	wdata = 1;
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_FONT_ACC_EN,
 		(u8 *)&wdata, sizeof(u32)), error);
@@ -406,19 +389,19 @@ enum error_type ext_watch_font_dump(struct spi_device *spi, char *font_dump)
 	size = sizeof(u32) * EXT_WATCH_FONT_NUM_SIZE;
 
 	for (font_sel = 0; font_sel < 10; font_sel++) {
-		// Font select : '0' ~ '9'
+		/* Font select : '0' ~ '9' */
 		font_data_offset = font_sel * size;
 		DO_SAFE(sic_spi_font_read(spi, (u8 *)&font_sel,
 			font_dump+font_data_offset, size), error);
 	}
 
-	// Font select : ':'
+	/* Font select : ':' */
 	font_data_offset = font_sel * size;
 	size = sizeof(u32) * EXT_WATCH_FONT_CHAR_SIZE;
 	DO_SAFE(sic_spi_font_read(spi, (u8 *)&font_sel,
 		font_dump+font_data_offset, size), error);
 
-	// Font memory access disable
+	/* Font memory access disable */
 	wdata = 0;
 	DO_SAFE(sic_spi_write(spi, EXT_WATCH_FONT_ACC_EN,
 		(u8 *)&wdata, sizeof(u32)), error);
@@ -431,31 +414,54 @@ error:
 	return ERROR;
 }
 
-enum error_type ext_watch_get_cfg(struct spi_device *spi, struct ext_watch_cfg *cfg)
+enum error_type ext_watch_get_dic_st(struct spi_device *spi)
 {
-	TOUCH_I("%s \n", __func__);
+	u32 dic_status = 0;
+	u32 watch_status = 0;
 
-	DO_IF(ext_watch_get_mode(spi, cfg) != 0, error);
-	DO_IF(ext_watch_get_position(spi, cfg) != 0, error);
-	DO_IF(ext_watch_get_current_time(spi,cfg)!= 0, error);
+	TOUCH_I("%s\n", __func__);
+
+	DO_SAFE(sic_spi_read(spi,  SYS_DISPMODE_STATUS, (u8 *)&dic_status,
+		sizeof(u32)), error);
+	DO_SAFE(sic_spi_read(spi,  EXT_WATCH_RTC_CTRL, (u8 *)&watch_status,
+		sizeof(u32)), error);
+
+	TOUCH_I("DIC_STATUS U%d , Watch %s\n",
+		(dic_status>>5)&0x3, watch_status ? "ON" : "OFF");
 
 	return NO_ERROR;
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 
-enum error_type ext_watch_set_cfg(struct spi_device *spi,struct ext_watch_cfg *cfg)
+enum error_type ext_watch_get_cfg(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
 {
-	TOUCH_I("%s \n", __func__);
+	TOUCH_I("%s\n", __func__);
 
-	cfg->mode.watch_ctrl.alpha = 1; // bypass foreground
-	DO_IF(ext_watch_set_mode(spi, cfg) != 0, error);
-	DO_IF(ext_watch_set_position(spi, cfg) != 0, error);
+	DO_IF(ext_watch_get_mode(spi, cfg) != 0, error);
+	DO_IF(ext_watch_get_position(spi, cfg) != 0, error);
+	DO_IF(ext_watch_get_current_time(spi, cfg) != 0, error);
+	ext_watch_get_dic_st(spi);
 
 	return NO_ERROR;
 error:
-	TOUCH_I("%s Fail \n", __func__);
+	TOUCH_I("%s Fail\n", __func__);
+	return ERROR;
+}
+
+enum error_type ext_watch_set_cfg(struct spi_device *spi,
+	struct ext_watch_cfg *cfg)
+{
+	cfg->mode.watch_ctrl.alpha = 1; /* bypass foreground */
+	DO_IF(ext_watch_set_mode(spi, cfg) != 0, error);
+	DO_IF(ext_watch_set_position(spi, cfg) != 0, error);
+
+	TOUCH_I("%s\n finish", __func__);
+	return NO_ERROR;
+error:
+	TOUCH_I("%s Fail\n", __func__);
 	return ERROR;
 }
 

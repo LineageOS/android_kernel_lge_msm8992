@@ -15,6 +15,7 @@
 
 #include "../../qcom/msm8992.dtsi"
 #include "msm8992-pplus_spr_us.dtsi"
+#include "../msm8992-headset-amp-es9018.dtsi"
 
 / {
 	model = "Qualcomm Technologies, Inc. MSM8992 PPLUS SPR";
@@ -34,13 +35,14 @@
 
 		max17050@36 {
 			status = "ok";
-			interrupts = <0x3f 0x0>;
-			max17048,alert_gpio = <&msm_gpio 0x3f 0x0>;
 		};
 	};
 
 	i2c_5: i2c@f9967000 {
 		ti-tas2552_41@41 {
+			status = "ok";
+		};
+		es9018-codec@48 {
 			status = "ok";
 		};
 	};
@@ -58,6 +60,10 @@
 			status = "disabled";
 		};
 	};
+
+        earjack-debugger {
+                status = "ok";
+        };
 };
 
 &slim_msm {
@@ -83,5 +89,20 @@
 			gpio-key,wakeup;
 			debounce-interval = <15>;
 		};
+	};
+};
+
+&pm8994_gpios {
+
+	gpio@cc00 { /* GPIO 13 HIFI_LDO_SW */
+		status = "ok";
+	};
+
+	gpio@d200 { /* GPIO 19 HIFI_HPH_SW */
+		status = "ok";
+	};
+
+	gpio@d500 { /* GPIO 22 HIFI_RESET_N */
+		status = "ok";
 	};
 };

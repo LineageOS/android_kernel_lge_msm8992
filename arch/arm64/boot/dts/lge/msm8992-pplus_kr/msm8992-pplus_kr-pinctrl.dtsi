@@ -201,24 +201,65 @@
 			};
 		};
 
-        pmx_spi_tdmb_active {
+        pmx_spi_blsp12_tdmb_active {
             qcom,pins =  <&gp 85>, <&gp 86>, <&gp 87>, <&gp 88>;
             qcom,num-grp-pins = <4>;
             qcom,pin-func = <1>;
-            label = "pmx_spi_tdmb_active";
-            spi_tdmb_active: spi_tdmb_active {
+            label = "pmx_spi_blsp12_tdmb_active";
+            spi_blsp12_tdmb_active: spi_blsp12_tdmb_active {
                 drive-strength = <8>; /* 8MA */
                 bias-disable;
                 };
             };
-        pmx_spi_tdmb_suspend {
+        pmx_spi_blsp12_tdmb_suspend {
             qcom,pins =  <&gp 85>, <&gp 86>, <&gp 87>, <&gp 88>;
             qcom,num-grp-pins = <4>;
             qcom,pin-func = <0>;
-            label = "pmx_spi_tdmb_suspend";
-            spi_tdmb_suspend: spi_tdmb_suspend {
-                drive-strength = <2>; /* 8MA */
+            label = "pmx_spi_blsp12_tdmb_suspend";
+            spi_blsp12_tdmb_suspend: spi_blsp12_tdmb_suspend {
+                drive-strength = <2>; /* 2MA */
                 bias-pull-down;
+                };
+            };
+
+        pmx_spi_blsp10_bus_active {
+            qcom,pins =  <&gp 53>, <&gp 54>, <&gp 56>;
+            qcom,num-grp-pins = <3>;
+            qcom,pin-func = <2>;
+            label = "pmx_spi_blsp10_bus_active";
+            spi_blsp10_bus_active: spi_blsp10_bus_active {
+                drive-strength = <8>; /* 8MA */
+                biad-disable;
+                };
+            };
+        pmx_spi_blsp10_cs_active {
+            qcom,pins =  <&gp 55>, <&gp 68>, <&gp 90>;
+            qcom,num-grp-pins = <3>;
+            qcom,pin-func = <2>;
+            label = "pmx_spi_blsp10_cs_active";
+            spi_blsp10_cs_active: spi_blsp10_cs_active {
+                drive-strength = <8>; /* 8MA */
+                biad-disable;
+                };
+            };
+        pmx_spi_blsp10_bus_suspend {
+            qcom,pins =  <&gp 53>, <&gp 54>, <&gp 56>;
+            qcom,num-grp-pins = <3>;
+            qcom,pin-func = <0>;
+            label = "pmx_spi_blsp10_bus_suspend";
+            spi_blsp10_bus_suspend: spi_blsp10_bus_suspend {
+                drive-strength = <2>; /* 2MA */
+                 bias-pull-down; /*ok*/
+                };
+            };
+        pmx_spi_blsp10_cs_suspend {
+            qcom,pins =  <&gp 55>, <&gp 68>, <&gp 90>;
+            qcom,num-grp-pins = <3>;
+            qcom,pin-func = <0>;
+            label = "pmx_spi_blsp10_cs_suspend";
+            spi_blsp10_cs_suspend: spi_blsp10_cs_suspend {
+                drive-strength = <2>; /* 2MA */
+                 bias-pull-down;  /*ok*/
                 };
             };
         pmx_tdmb_ctrl {
@@ -419,7 +460,7 @@
 			label = "pmx_wlan_enable";
 			/* default state */
 			pmx_wlan_enable_default: default {
-				drive-strength = <8>;
+				drive-strength = <2>;
 				bias-pull-down;
 			};
 		};
@@ -431,7 +472,7 @@
 			label = "pmx_wlan_hostwake";
 			/* default state */
 			pmx_wlan_hostwake_default: default {
-				drive-strength = <8>;
+				drive-strength = <2>;
 				bias-pull-down;
 				input-debounce = <0>;
 			};
@@ -543,6 +584,17 @@
 			seta_2: seta {
 				drive-strength = <16>;
 				bias-disable;
+			};
+		};
+	/* HIFI_AUD_EN */
+		 hifi_aud_en {
+			qcom,pins = <&gp 52>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "hifi-audio-enable";
+			audio_en: audio_en {
+				drive-strength = <4>;
+				bias-pull-up;
 			};
 		};
 
@@ -942,6 +994,18 @@
 			};
 		};
 
+		wcd9xxx_intr {
+			qcom,pins = <&gp 72>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "wcd-intr-default";
+			wcd_intr_default: default {
+				drive-strength = <2>; /* 2 MA */
+				bias-pull-down; /* pull down */
+				input-enable;
+			};
+		};
+
 		spi0_active {
 			/* MOSI, MISO, CLK */
 			qcom,pins = <&gp 0>, <&gp 1>, <&gp 3>;
@@ -1110,6 +1174,73 @@
 			};
 		};
 
+		multi_spi_bus {
+			qcom,pins = <&gp 53>, <&gp 54>, <&gp 56>;
+			qcom,num-grp-pins = <3>;
+			qcom,pin-func = <2>;
+			label = "spi10-bus";
+
+			spi10_bus_active: spi10_bus_active {
+				drive-strength = <12>;
+				bias-disable;
+			};
+
+			spi10_bus_sleep: spi10_bus_sleep {
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		multi_spi_cs {
+			qcom,pins = <&gp 55>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <2>;
+			label = "spi10-cs";
+
+			spi10_cs_active: spi10_cs_active {
+				drive-strength = <4>;
+				bias-disable;
+			};
+
+			spi10_cs_sleep: spi10_cs_sleep {
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		multi_stm_cs {
+			qcom,pins = <&gp 68>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "spi10-cs";
+
+			stm_cs_active: stm_cs_active {
+				drive-strength = <4>;
+				bias-disable;
+			};
+
+			stm_cs_sleep: stm_cs_sleep {
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		multi_tdmb_cs {
+			qcom,pins = <&gp 90>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "spi10-cs";
+
+			tdmb_cs_active: tdmb_cs_active {
+				drive-strength = <8>;
+				bias-disable;
+			};
+
+			tdmb_cs_sleep: tdmb_cs_sleep {
+				drive-strength = <2>;
+				bias-pull-down;
+			};
+		};
 		pmx_fm_int_active {
 			qcom,pins = <&gp 9>;
 			qcom,pin-func = <0>;
@@ -1495,7 +1626,7 @@
 			};
 		};
 		irrc_rst {
-			qcom,pins = <&gp 93>;
+			qcom,pins = <&gp 37>;
 			qcom,pin-func = <0>;
 			qcom,num-grp-pins = <1>;
 			label = "uart_rst";
@@ -1758,8 +1889,8 @@
 			qcom,pin-func = <0>;
 			label = "pmx_spi_blsp12_suspend";
 			spi_blsp12_suspend: spi_blsp12_suspend {
-				drive-strength = <8>;
-				bias-pull-down;
+				drive-strength = <2>;
+				bias-disable; /* No PULL */
 			};
 		};
 
@@ -1780,8 +1911,8 @@
 			qcom,pin-func = <0>;
 			label = "pmx_spi_blsp10_suspend";
 			spi_blsp10_suspend: spi_blsp10_suspend {
-				drive-strength = <8>;
-				bias-pull-down;
+				drive-strength = <2>;
+				bias-disable; /* No PULL */
 			};
 		};
 

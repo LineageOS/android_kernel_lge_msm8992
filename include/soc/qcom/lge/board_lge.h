@@ -32,6 +32,10 @@ struct lcd_platform_data {
 void __init lge_add_lcd_misc_devices(void);
 #endif
 
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+int lge_get_lgd_sic4945_rev(void);
+#endif
+
 #ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
 struct pseudo_batt_info_type {
 	int mode;

@@ -37,11 +37,22 @@
 #include <linux/irqchip/msm-gpio-irq.h>
 #include <linux/irqchip/msm-mpm-irq.h>
 #include <linux/err.h>
+#include <linux/input.h>
+#include <linux/mutex.h>
+#include <linux/regulator/consumer.h>
+#include <linux/wakelock.h>
+#include <linux/jiffies.h>
+#include "qseecom_kernel.h"
+
 
 #include "fpc_btp.h"
 #include "fpc_btp_regs.h"
+#include "fpc_log.h"
 
+//#define SUPPORT_TZ_CMD_WAKELOCK
 #define SUPPORT_TRUSTZONE
+#define INTERRUPT_INPUT_REPORT
+
 /* #define FEATURE_FPC_USE_XO */
 /* #define FEATURE_FPC_USE_PINCTRL */
 
@@ -57,41 +68,30 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Fingerprint Cards AB <tech@fingerprints.com>");
 MODULE_DESCRIPTION("FPC_BTP area sensor driver.");
 
-
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-	const bool target_little_endian = true;
-#else
-	#warning BE target not tested!
-	const bool target_little_endian = false;
-#endif
-/* -------------------------------------------------------------------- */
-/* fpc_btp sensor commands                                              */
-/* -------------------------------------------------------------------- */
-
-
-/* -------------------------------------------------------------------- */
-/* global variables                                                     */
-/* -------------------------------------------------------------------- */
-static int fpc_btp_device_count;
-
 /* -------------------------------------------------------------------- */
 /* fpc_btp data types                                                   */
 /* -------------------------------------------------------------------- */
+struct fpc_test_result {
+	int  pass;
+	int  value;
+};
+
 struct fpc_btp_data_t {
 	struct spi_device      *spi;
-	struct class           *class;
-	struct device          *device;
-	struct cdev            cdev;
-	dev_t                  devno;
+	struct input_dev       *input;
 	u32                    cs_gpio;
 	u32                    reset_gpio;
 	u32                    irq_gpio;
 	int                    irq;
-	int                    int_done;
-	int                    select_checkerboard;
-
+	struct mutex           p_mutex;
+	bool                   power_on;
+	struct fpc_btp_platform_data *platform_pdata;
+#ifdef SUPPORT_TZ_CMD_WAKELOCK
+	struct wake_lock       cmd_wake_lock;
+#endif
 #if defined(SUPPORT_TRUSTZONE)
 	u32 qup_id;
+	bool pipe_owner;
 
 	/* picntrl info */
 	struct pinctrl *pinctrl;
@@ -112,23 +112,27 @@ struct fpc_btp_reg_access_t {
 };
 
 
-
 /* -------------------------------------------------------------------- */
 /* fpc_btp driver constants                                             */
 /* -------------------------------------------------------------------- */
 #define FPC_BTP_HWID_A           0x022a
 #define FPC_BTP_HWID_B           0x0111
 
-#define FPC_BTP_DEV_NAME            "btp"
-#define FPC_BTP_CLASS_NAME          "fpsensor"
-#define FPC_BTP_MAJOR               229
-#define FPC_BTP_RESET_RETRIES       2
-#define FPC_BTP_IOCTL_MAGIC_NO      0xFC
-#define FPC_BTP_IOCTL_RESET         _IO(FPC_BTP_IOCTL_MAGIC_NO, 0)
-#define FPC_BTP_IOCTL_INTR_STATUS   _IOR(FPC_BTP_IOCTL_MAGIC_NO, 1, int)
-#define FPC_BTP_SPI_CLOCK_SPEED     (5 * 1000000U)
+#define FPC_BTP_DEV_NAME         "btp"
+#define FPC_BTP_RESET_RETRIES    2
+#define FPC_BTP_SUPPLY_1V8       1800000UL
+#define FPC_BTP_VOLTAGE_MIN      FPC_BTP_SUPPLY_1V8
+#define FPC_BTP_VOLTAGE_MAX      FPC_BTP_SUPPLY_1V8
+#define FPC_BTP_LOAD_UA          7000
 
+/* CMD ID collected from tzbsp_blsp.c to change Ownership */
+static const u32 TZ_BLSP_MODIFY_OWNERSHIP_ID = 3;
+static const u32 TZBSP_APSS_ID = 1;
+static const u32 TZBSP_TZ_ID = 3;
 
+#ifdef INTERRUPT_INPUT_REPORT
+#define FPC_BTP_INTERRUPT                        REL_MISC
+#endif
 
 /* -------------------------------------------------------------------- */
 /* function prototypes                                                  */
@@ -140,21 +144,12 @@ static int fpc_btp_probe(struct spi_device *spi);
 static int fpc_btp_remove(struct spi_device *spi);
 static int fpc_btp_suspend(struct device *dev);
 static int fpc_btp_resume(struct device *dev);
-static int fpc_btp_open(struct inode *inode, struct file *file);
-static ssize_t fpc_btp_write(struct file *file,
-					const char *buff,
-					size_t count, loff_t *ppos);
-static ssize_t fpc_btp_read(struct file *file,
-					char *buff,
-					size_t count, loff_t *ppos);
-static int fpc_btp_release(struct inode *inode, struct file *file);
-static long fpc_btp_ioctl(struct file *filp,
-					unsigned int cmd,
-					unsigned long arg);
-static unsigned int fpc_btp_poll(struct file *file, poll_table *wait);
+
 static int fpc_btp_cleanup(struct fpc_btp_data_t *fpc_btp,
 					struct spi_device *spidev);
 static int fpc_btp_reset_init(struct fpc_btp_data_t *fpc_btp,
+					struct fpc_btp_platform_data *pdata);
+static int fpc_btp_cs_init(struct fpc_btp_data_t *fpc_btp,
 					struct fpc_btp_platform_data *pdata);
 static int fpc_btp_irq_init(struct fpc_btp_data_t *fpc_btp,
 					struct fpc_btp_platform_data *pdata);
@@ -162,12 +157,13 @@ static int fpc_btp_get_of_pdata(struct device *dev,
 					struct fpc_btp_platform_data *pdata);
 static int fpc_btp_gpio_reset(struct fpc_btp_data_t *fpc_btp);
 static int fpc_btp_sleep(struct fpc_btp_data_t *fpc_btp, bool deep_sleep);
-static int fpc_btp_create_class(struct fpc_btp_data_t *fpc_btp);
-static int fpc_btp_create_device(struct fpc_btp_data_t *fpc_btp);
 static irqreturn_t fpc_btp_interrupt(int irq, void *_fpc_btp);
 static int fpc_btp_verify_hw_id(struct fpc_btp_data_t *fpc_btp);
 static int fpc_btp_reg_access(struct fpc_btp_data_t *fpc_btp,
 			      struct fpc_btp_reg_access_t *reg_data);
+static int fpc_btp_regulator_init(struct fpc_btp_data_t *fpc_btp,
+					struct fpc_btp_platform_data *pdata);
+static int fpc_btp_regulator_set(struct fpc_btp_data_t *fpc_btp, bool enable);
 
 
 
@@ -229,18 +225,6 @@ static struct spi_driver fpc_btp_driver = {
 	.remove	= fpc_btp_remove,
 };
 
-static const struct file_operations fpc_btp_fops = {
-	.owner          = THIS_MODULE,
-	.open           = fpc_btp_open,
-	.write          = fpc_btp_write,
-	.read           = fpc_btp_read,
-	.release        = fpc_btp_release,
-	.poll           = fpc_btp_poll,
-	.unlocked_ioctl = fpc_btp_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl = fpc_btp_ioctl,
-#endif  /* CONFIG_COMPAT */
-};
 
 /* -------------------------------------------------------------------- */
 /* function definitions                                                 */
@@ -256,48 +240,12 @@ static int __init fpc_btp_init(void)
 /* -------------------------------------------------------------------- */
 static void __exit fpc_btp_exit(void)
 {
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
 	spi_unregister_driver(&fpc_btp_driver);
 }
 
 #if defined(SUPPORT_TRUSTZONE)
-/*
-static int fpc_scm_call(struct scm_hdcp_req *req, u32 *resp)
-{
-	int ret = 0;
-
-	if (!is_scm_armv8()) {
-		ret = scm_call(SCM_SVC_HDCP, SCM_CMD_HDCP, (void *) req,
-			     SCM_HDCP_MAX_REG * sizeof(struct scm_hdcp_req),
-			     &resp, sizeof(*resp));
-	} else {
-		struct scm_desc desc;
-
-		desc.args[0] = req[0].addr;
-		desc.args[1] = req[0].val;
-		//desc.args[2] = req[1].addr;
-		//desc.args[3] = req[1].val;
-		//desc.args[4] = req[2].addr;
-		//desc.args[5] = req[2].val;
-		//desc.args[6] = req[3].addr;
-		//desc.args[7] = req[3].val;
-		//desc.args[8] = req[4].addr;
-		//desc.args[9] = req[4].val;
-		desc.arginfo = SCM_ARGS(2);
-
-		ret = scm_call2(SCM_SIP_FNID(SCM_SVC_HDCP, SCM_CMD_HDCP),
-				&desc);
-		*resp = desc.ret[0];
-		if (ret)
-			return ret;
-	}
-
-	return ret;
-}
-*/
-
-/* Standard SPI device probe function  : Example of a slave probe function*/
 static int spi_test_probe(struct fpc_btp_data_t *fpc_btp)
 {
 	int ret = 0;
@@ -307,8 +255,7 @@ static int spi_test_probe(struct fpc_btp_data_t *fpc_btp)
 
 
 	if (IS_ERR_OR_NULL(fpc_btp->pinctrl)) {
-		dev_err(&fpc_btp->spi->dev,
-				"%s: Failed to get pinctrl\n", __func__);
+		PERR("Failed to get pinctrl");
 	  return PTR_ERR(fpc_btp->pinctrl);
 	}
 
@@ -316,9 +263,7 @@ static int spi_test_probe(struct fpc_btp_data_t *fpc_btp)
 	fpc_btp->pins_active = pinctrl_lookup_state(fpc_btp->pinctrl,
 						   PINCTRL_STATE_DEFAULT);
 	if (IS_ERR_OR_NULL(fpc_btp->pins_active)) {
-		dev_err(&fpc_btp->spi->dev,
-				"%s: Failed to get pinctrl state active\n",
-				__func__);
+		PERR("Failed to get pinctrl state active");
 		return PTR_ERR(fpc_btp->pins_active);
 	}
 
@@ -326,19 +271,15 @@ static int spi_test_probe(struct fpc_btp_data_t *fpc_btp)
 	fpc_btp->pins_sleep = pinctrl_lookup_state(fpc_btp->pinctrl,
 						  PINCTRL_STATE_SLEEP);
 	if (IS_ERR_OR_NULL(fpc_btp->pins_sleep)) {
-		dev_err(&fpc_btp->spi->dev,
-				"%s: Failed to get pinctrl state sleep\n",
-				__func__);
+		PERR("Failed to get pinctrl state sleep");
 		return PTR_ERR(fpc_btp->pins_sleep);
 	}
 
 	/* Get iface_clk info */
 	fpc_btp->iface_clk = clk_get(&fpc_btp->spi->dev, "iface_clk");
 	if (IS_ERR(fpc_btp->iface_clk)) {
-		dev_err(&fpc_btp->spi->dev,
-				"%s: Failed to get iface_clk %ld\n",
-				__func__,
-				PTR_ERR(fpc_btp->iface_clk));
+		PERR("Failed to get iface_clk %ld",
+			PTR_ERR(fpc_btp->iface_clk));
 
 		return PTR_ERR(fpc_btp->iface_clk);
 	}
@@ -346,10 +287,7 @@ static int spi_test_probe(struct fpc_btp_data_t *fpc_btp)
 	/* Get core_clk info */
 	fpc_btp->core_clk = clk_get(&fpc_btp->spi->dev, "core_clk");
 	if (IS_ERR(fpc_btp->core_clk)) {
-		dev_err(&fpc_btp->spi->dev,
-				"%s: Failed to get core_clk %p\n",
-				__func__,
-				fpc_btp->core_clk);
+		PERR("Failed to get core_clk %p", fpc_btp->core_clk);
 		return PTR_ERR(fpc_btp->core_clk);
 	}
 
@@ -359,7 +297,7 @@ static int spi_test_probe(struct fpc_btp_data_t *fpc_btp)
 							   &fpc_btp->qup_id);
 
 	if (ret) {
-		dev_err(&fpc_btp->spi->dev, "Error getting qup_id\n");
+		PERR("Error getting qup_id");
 		return ret;
 	}
 
@@ -378,17 +316,16 @@ static int spi_set_pinctrl(struct fpc_btp_data_t *fpc_btp, bool active)
 	fpc_btp->pinctrl = devm_pinctrl_get(&fpc_btp->spi->dev);
 
 	if (IS_ERR_OR_NULL(fpc_btp->pinctrl)) {
-		pr_err("%s: Getting pinctrl handle failed\n", __func__);
+		PERR("Getting pinctrl handle failed");
 		return -EINVAL;
 	}
 
 	if (active) { /* Change to active settings */
 		fpc_btp->pins_active
-		= pinctrl_lookup_state(fpc_btp->pinctrl, "default");
+			= pinctrl_lookup_state(fpc_btp->pinctrl, "default");
 
 		if (IS_ERR_OR_NULL(fpc_btp->pins_active)) {
-			pr_err("%s: Failed to get the suspend state	pinctrl handle\n",
-				   __func__);
+			PERR("Failed to get the suspend state pinctrl handle");
 			return -EINVAL;
 		}
 
@@ -397,23 +334,17 @@ static int spi_set_pinctrl(struct fpc_btp_data_t *fpc_btp, bool active)
 	} else {
 
 		fpc_btp->pins_sleep = pinctrl_lookup_state(fpc_btp->pinctrl,
-												   "sleep");
+			"sleep");
 
 		if (IS_ERR_OR_NULL(fpc_btp->pins_sleep)) {
-			pr_err("%s: Failed to get the suspend state pinctrl handle\n",
-				   __func__);
-				   return -EINVAL;
+			PERR("Failed to get the suspend state pinctrl handle");
+			return -EINVAL;
 		}
 
 		ret = pinctrl_select_state(fpc_btp->pinctrl,
 			  fpc_btp->pins_sleep);
 	}
 
-	dev_err(&fpc_btp->spi->dev,
-			"%s: pinctrl_select_state ret:%d Setting:%d\n",
-			 __func__,
-			 ret,
-			 active);
 	return ret;
 }
 
@@ -441,27 +372,21 @@ static int spi_set_clks(struct fpc_btp_data_t *fpc_btp, bool enable)
 		/* Enable the spi clocks */
 
 		ret = clk_set_rate(fpc_btp->core_clk,
-						   fpc_btp->spi->max_speed_hz);
+				   fpc_btp->spi->max_speed_hz);
 		if (ret) {
-			dev_err(&fpc_btp->spi->dev,
-					"%s: Error setting clk_rate:%d\n",
-					__func__,
-					fpc_btp->spi->max_speed_hz);
+			PERR("Error setting clk_rate:%d",
+				fpc_btp->spi->max_speed_hz);
 		}
 
 		ret = clk_prepare_enable(fpc_btp->core_clk);
 		if (ret) {
-			dev_err(&fpc_btp->spi->dev,
-					"%s: Error enabling core clk\n",
-					__func__);
+			PERR("Error enabling core clk");
 		}
 
 		ret = clk_prepare_enable(fpc_btp->iface_clk);
 
 		if (ret) {
-			dev_err(&fpc_btp->spi->dev,
-			"%s: Error enabling iface clk\n",
-			__func__);
+			PERR("Error enabling iface clk");
 		}
 
 	} else {
@@ -476,10 +401,6 @@ static int spi_set_clks(struct fpc_btp_data_t *fpc_btp, bool enable)
 /* Example of a change in BAM Pipe ownership */
 static int spi_change_pipe_owner(struct fpc_btp_data_t *fpc_btp, bool to_tz)
 {
-	/* CMD ID collected from tzbsp_blsp.c to change Ownership */
-	const u32 TZ_BLSP_MODIFY_OWNERSHIP_ID = 3;
-	const u32 TZBSP_APSS_ID = 1;
-	const u32 TZBSP_TZ_ID = 3;
 	struct scm_desc desc; /* scm call descriptor */
 	int ret;
 
@@ -492,8 +413,84 @@ static int spi_change_pipe_owner(struct fpc_btp_data_t *fpc_btp, bool to_tz)
 	ret = scm_call2(SCM_SIP_FNID(SCM_SVC_TZ,
 					TZ_BLSP_MODIFY_OWNERSHIP_ID), &desc);
 
-	return (ret || desc.ret[0]) ? -1 : 0;
+	if(ret || desc.ret[0]) {
+		PERR("ownership change failed!!");
+		return -1;
+	}
+
+	/* set spi ownership flag */
+	fpc_btp->pipe_owner = to_tz;
+
+	return 0;
 }
+
+static int spi_set_prepare(struct fpc_btp_data_t *fpc_btp, bool enable)
+{
+	int ret = 0;
+
+	mutex_lock(&fpc_btp->p_mutex);
+
+	if(enable && !fpc_btp->pipe_owner)  {
+#ifdef SUPPORT_TZ_CMD_WAKELOCK
+		wake_lock(&fpc_btp->cmd_wake_lock);
+#endif
+		ret = spi_set_pinctrl(fpc_btp, true);
+		if(ret) {
+			PERR("spi_set_pinctrl failed : %d", ret);
+			goto prepare_err;
+		}
+
+		ret = spi_set_fabric(fpc_btp, true);
+		if(ret) {
+			PERR("spi_set_fabric failed : %d", ret);
+			goto prepare_err;
+		}
+
+		ret = spi_set_clks(fpc_btp, true);
+		if(ret) {
+			PERR("spi_set_clks failed : %d", ret);
+			goto prepare_err;
+		}
+
+		ret = spi_change_pipe_owner(fpc_btp, true);
+		if(ret) {
+			PERR("change pipe owner failed : %d", ret);
+			goto prepare_err;
+		}
+
+	} else if(!enable && fpc_btp->pipe_owner) {
+		ret = spi_change_pipe_owner(fpc_btp, false);
+		if(ret) {
+			PERR("change pipe owner failed !!");
+			goto prepare_err;
+		}
+		ret = spi_set_clks(fpc_btp, false);
+		if(ret) {
+			PERR("spi_set_clks failed : %d", ret);
+			goto prepare_err;
+		}
+
+		ret = spi_set_fabric(fpc_btp, false);
+		if(ret) {
+			PERR("spi_set_fabric failed : %d", ret);
+			goto prepare_err;
+		}
+
+		ret = spi_set_pinctrl(fpc_btp, false);
+		if(ret) {
+			PERR("spi_set_pinctrl failed : %d", ret);
+			goto prepare_err;
+		}
+#ifdef SUPPORT_TZ_CMD_WAKELOCK
+		wake_unlock(&fpc_btp->cmd_wake_lock);
+#endif
+	}
+
+prepare_err:
+	mutex_unlock(&fpc_btp->p_mutex);
+	return ret;
+}
+
 #endif
 
 /* -------------------------------------------------------------------- */
@@ -504,11 +501,10 @@ static int fpc_btp_reg_access(struct fpc_btp_data_t *fpc_btp,
 	int cmd_size = 1;
 	u8 tx[reg_data->reg_size+cmd_size];
 	struct spi_message msg;
-
 	struct spi_transfer data = {
 		.cs_change = 0,
 		.delay_usecs = 0,
-		.speed_hz = FPC_BTP_SPI_CLOCK_SPEED,
+		.speed_hz = fpc_btp->spi->max_speed_hz,
 		.tx_buf = tx,
 		.rx_buf = (!reg_data->write)? tx : NULL,
 		.len    = reg_data->reg_size+cmd_size,
@@ -519,18 +515,14 @@ static int fpc_btp_reg_access(struct fpc_btp_data_t *fpc_btp,
 
 	tx[0] = reg_data->reg;
 	if (reg_data->write) {
-		if (target_little_endian) {
-			int src = 0;
-			int dst = reg_data->reg_size - 1 + cmd_size;
-			while (src < reg_data->reg_size) {
-				tx[dst] = reg_data->dataptr[src];
-				src++;
-				dst--;
-			}
-		} else {
-			memcpy(&tx[cmd_size], reg_data->dataptr,
-				reg_data->reg_size);
+		int src = 0;
+		int dst = reg_data->reg_size - 1 + cmd_size;
+		while (src < reg_data->reg_size) {
+			tx[dst] = reg_data->dataptr[src];
+			src++;
+			dst--;
 		}
+
 	}
 
 	spi_message_init(&msg);
@@ -538,25 +530,36 @@ static int fpc_btp_reg_access(struct fpc_btp_data_t *fpc_btp,
 
 	error = spi_sync(fpc_btp->spi, &msg);
 	if (error) {
-		dev_err(&fpc_btp->spi->dev, "spi_sync failed.\n");
+		PERR("spi_sync failed.");
 	}
 
 	if (!reg_data->write) {
-		if (target_little_endian) {
-			int src = reg_data->reg_size - 1+cmd_size;
-			int dst = 0;
+		int src = reg_data->reg_size - 1+cmd_size;
+		int dst = 0;
 
-			while (dst < reg_data->reg_size) {
-				reg_data->dataptr[dst] =
-				tx[src];
-				src--;
-				dst++;
-			}
-		} else {
-			memcpy(reg_data->dataptr, &tx[cmd_size],
-				reg_data->reg_size);
+		while (dst < reg_data->reg_size) {
+			reg_data->dataptr[dst] =
+			tx[src];
+			src--;
+			dst++;
 		}
 	}
+
+	return error;
+}
+
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_get_hwid(struct fpc_btp_data_t *fpc_btp,
+					u16 *version)
+{
+	int error = 0;
+	struct fpc_btp_reg_access_t reg;
+
+	PINFO("enter");
+
+	FPC_BTP_MK_REG_READ(reg, FPC_BTP_REG_HWID, version);
+	error = fpc_btp_reg_access(fpc_btp, &reg);
 
 	return error;
 }
@@ -566,38 +569,35 @@ static int fpc_btp_reg_access(struct fpc_btp_data_t *fpc_btp,
 static int fpc_btp_verify_hw_id(struct fpc_btp_data_t *fpc_btp)
 {
 	int error = 0;
-	u16 version;
-	struct fpc_btp_reg_access_t reg;
+	u16 version = 0;
 
-	dev_dbg(&fpc_btp->spi->dev, "%s\n", __func__);
+	PINFO("enter");
 
-	FPC_BTP_MK_REG_READ(reg, FPC_BTP_REG_HWID, &version);
-	error = fpc_btp_reg_access(fpc_btp, &reg);
-
+	error = fpc_btp_get_hwid(fpc_btp, &version);
 	if (error) {
-		dev_err(&fpc_btp->spi->dev, "fpc_btp_reg_access failed.\n");
+		PERR("fpc_btp_reg_access failed.");
 		return error;
 	}
 
 	if ((version != FPC_BTP_HWID_A) && (version != FPC_BTP_HWID_B)) {
-		dev_err(&fpc_btp->spi->dev,
-			"HWID mismatch: got 0x%x, expected 0x%x or 0x%x\n",
+		PERR("HWID mismatch: got 0x%x, expected 0x%x or 0x%x\n",
 			version,
 			FPC_BTP_HWID_A, FPC_BTP_HWID_B);
 
 		return -EIO;
 	}
-	dev_info(&fpc_btp->spi->dev, "HWID: 0x%x\n", version);
+	PINFO("HWID: 0x%x", version);
 
 	return error;
 }
 
+/* -------------------------------------------------------------------- */
 static int fpc_btp_spi_setup(struct fpc_btp_data_t *fpc_btp,
 					struct fpc_btp_platform_data *pdata)
 {
 	int error = 0;
 
-	printk(KERN_INFO "%s\n", __func__);
+	PDEBUG("enter");
 
 	fpc_btp->spi->mode = SPI_MODE_0;
 	fpc_btp->spi->bits_per_word = 8;
@@ -606,7 +606,7 @@ static int fpc_btp_spi_setup(struct fpc_btp_data_t *fpc_btp,
 	error = spi_setup(fpc_btp->spi);
 
 	if (error) {
-		dev_err(&fpc_btp->spi->dev, "spi_setup failed\n");
+		PERR("spi_setup failed");
 		goto out_err;
 	}
 
@@ -615,24 +615,215 @@ out_err:
 }
 
 
+static ssize_t fpc_btp_show_qup_id(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	return sprintf(buf, "%d\n", fpc_btp->qup_id);
+}
+
+static DEVICE_ATTR(qup_id, S_IRUGO,
+		   fpc_btp_show_qup_id, NULL);
+
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_show_intstatus(struct device *dev,
+				   struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "not support\n");
+}
+
+static DEVICE_ATTR(intstatus, S_IRUGO,
+		   fpc_btp_show_intstatus, NULL);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_pinctrl_set(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	int res = spi_set_pinctrl(fpc_btp, *buf == '1');
+	return res ? res : count;
+}
+
+static DEVICE_ATTR(pinctrl, S_IWUSR, NULL, fpc_btp_store_pinctrl_set);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_fabric_vote_set(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	int res = spi_set_fabric(fpc_btp, *buf == '1');
+	return res ? res : count;
+}
+
+static DEVICE_ATTR(fabric_vote, S_IWUSR, NULL, fpc_btp_store_fabric_vote_set);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_clk_enable_set(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	int res = spi_set_clks(fpc_btp, *buf == '1');
+	return res ? res : count;
+}
+
+static DEVICE_ATTR(clk_enable, S_IWUSR, NULL, fpc_btp_store_clk_enable_set);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_spi_owner_set(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	int res = spi_change_pipe_owner(fpc_btp, *buf == '1');
+	return res ? res : count;
+}
+
+static DEVICE_ATTR(spi_owner, S_IWUSR, NULL, fpc_btp_store_spi_owner_set);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_spi_prepare_set(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	int res;
+	bool to_tz;
+
+	if(*buf == '1')
+	  to_tz = true;
+	else if(*buf == '0')
+	  to_tz = false;
+	else
+	  return -EINVAL;
+
+	res = spi_set_prepare(fpc_btp, to_tz);
+
+	return res ? res : count;
+}
+
+static ssize_t fpc_btp_show_spi_prepare(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+
+	if(fpc_btp->pipe_owner)
+	  return sprintf(buf, "%d \n", TZBSP_TZ_ID);
+	else
+	  return sprintf(buf, "%d \n", TZBSP_APSS_ID);
+}
+
+static DEVICE_ATTR(spi_prepare, S_IRUGO | S_IWUSR,
+		fpc_btp_show_spi_prepare, fpc_btp_store_spi_prepare_set);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_regulator(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	bool enable;
+
+	if(*buf == '1')
+		enable = true;
+	else
+		enable = false;
+
+	if(fpc_btp_regulator_set(fpc_btp,  enable) < 0)
+		PERR("regulator (%d) fail", enable);
+
+	return count;
+}
+
+static ssize_t fpc_btp_show_regulator(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d \n", fpc_btp->power_on);
+}
+
+static DEVICE_ATTR(regulator, S_IRUGO | S_IWUSR,
+		fpc_btp_show_regulator, fpc_btp_store_regulator);
+
+/* -------------------------------------------------------------------- */
+static ssize_t fpc_btp_store_gpio(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+	int error;
+
+	if(*buf == '1' && !fpc_btp->power_on) {
+		error = regulator_enable(fpc_btp->platform_pdata->vreg);
+		if(error < 0) {
+			PERR("regulator enable fail");
+			return count;
+		}
+
+		if((error = fpc_btp_gpio_reset(fpc_btp)))
+			PERR("reset gpio init fail");
+
+		enable_irq(fpc_btp->irq);
+		fpc_btp->power_on = true;
+	}
+	else if(*buf == '0' && fpc_btp->power_on) {
+		disable_irq(fpc_btp->irq);
+		gpio_direction_output(fpc_btp->reset_gpio, 0);
+		error = regulator_disable(fpc_btp->platform_pdata->vreg);
+		if(error < 0) {
+			PERR("regulator disable fail");
+			return count;
+		}
+		fpc_btp->power_on = false;
+	}
+
+	return count;
+}
+
+static ssize_t fpc_btp_show_gpio(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%d \n", fpc_btp->power_on);
+}
+
+static DEVICE_ATTR(gpio, S_IRUGO | S_IWUSR,
+		fpc_btp_show_gpio, fpc_btp_store_gpio);
+
+/* -------------------------------------------------------------------- */
+
+static struct attribute *fpc_btp_attributes[] = {
+	&dev_attr_intstatus.attr,
+	&dev_attr_qup_id.attr,
+	&dev_attr_pinctrl.attr,
+	&dev_attr_fabric_vote.attr,
+	&dev_attr_clk_enable.attr,
+	&dev_attr_spi_owner.attr,
+	&dev_attr_spi_prepare.attr,
+	&dev_attr_regulator.attr,
+	&dev_attr_gpio.attr,
+	NULL
+};
+
+
+static const struct attribute_group fpc_btp_attr_group = {
+	.attrs = fpc_btp_attributes,
+};
+
 
 /* -------------------------------------------------------------------- */
 static int fpc_btp_probe(struct spi_device *spi)
 {
 	struct fpc_btp_platform_data *fpc_btp_pdata;
-	struct fpc_btp_platform_data pdata_of;
 	struct device *dev = &spi->dev;
 	int error = 0;
 	struct fpc_btp_data_t *fpc_btp = NULL;
 
-	fpc_btp = kzalloc(sizeof(*fpc_btp), GFP_KERNEL);
+	PDEBUG("enter");
+
+	fpc_btp = devm_kzalloc(dev, sizeof(*fpc_btp), GFP_KERNEL);
 	if (!fpc_btp) {
-		dev_err(&spi->dev,
-		"failed to allocate memory for struct fpc_btp_data\n");
+		PERR("failed to allocate memory for struct fpc_btp_data");
 		return -ENOMEM;
 	}
-
-	pr_info("%s\n", __func__);
 
 	spi_set_drvdata(spi, fpc_btp);
 	fpc_btp->spi = spi;
@@ -640,49 +831,59 @@ static int fpc_btp_probe(struct spi_device *spi)
 	fpc_btp->irq_gpio   = -EINVAL;
 	fpc_btp->cs_gpio    = -EINVAL;
 	fpc_btp->irq        = -EINVAL;
+	fpc_btp->pipe_owner = false;
+	mutex_init(&fpc_btp->p_mutex);
+#ifdef SUPPORT_TZ_CMD_WAKELOCK
+	wake_lock_init(&fpc_btp->cmd_wake_lock, WAKE_LOCK_SUSPEND, "csfp_wakelock");
+#endif
+	fpc_btp->platform_pdata = NULL;
 
-	fpc_btp_pdata = spi->dev.platform_data;
-	if (!fpc_btp_pdata) {
-		error = fpc_btp_get_of_pdata(dev, &pdata_of);
+	if(spi->dev.of_node) {
+		fpc_btp_pdata = devm_kzalloc(dev, sizeof(*fpc_btp_pdata), GFP_KERNEL);
+		if (!fpc_btp_pdata) {
+			PERR("Failed to allocate memory");
+			return -ENOMEM;
+		}
+
+		spi->dev.platform_data = fpc_btp_pdata;
+		fpc_btp->platform_pdata = fpc_btp_pdata;
+		error = fpc_btp_get_of_pdata(dev, fpc_btp_pdata);
 		if (error)
 			goto err;
 
-		fpc_btp_pdata = &pdata_of;
-		if (!fpc_btp_pdata) {
-			dev_err(&fpc_btp->spi->dev,
-					"spi->dev.platform_data is NULL.\n");
-			error = -EINVAL;
-			goto err;
-		}
+	} else {
+		fpc_btp_pdata = spi->dev.platform_data;
 	}
 
-	error = fpc_btp_reset_init(fpc_btp, fpc_btp_pdata);
-	if(error)
+	if((error = fpc_btp_regulator_init(fpc_btp, fpc_btp_pdata)) < 0)
 		goto err;
 
-	error = fpc_btp_irq_init(fpc_btp, fpc_btp_pdata);
-	if(error)
+	if((error = fpc_btp_regulator_set(fpc_btp, true)))
+			goto err;
+
+	if((error = fpc_btp_reset_init(fpc_btp, fpc_btp_pdata)))
 		goto err;
 
-	error = fpc_btp_spi_setup(fpc_btp, fpc_btp_pdata);
-	if(error)
+	if((error = fpc_btp_cs_init(fpc_btp, fpc_btp_pdata)))
 		goto err;
 
-	error = fpc_btp_gpio_reset(fpc_btp);
-	if(error)
+	if((error = fpc_btp_irq_init(fpc_btp, fpc_btp_pdata)))
 		goto err;
 
-	error = fpc_btp_verify_hw_id(fpc_btp);
-	if(error)
+	if((error = fpc_btp_spi_setup(fpc_btp, fpc_btp_pdata)))
 		goto err;
 
+	if((error = fpc_btp_gpio_reset(fpc_btp)))
+		goto err;
+
+	if((error = fpc_btp_verify_hw_id(fpc_btp)))
+		goto err;
 
 #if defined(SUPPORT_TRUSTZONE)
 	error = spi_test_probe(fpc_btp);
 	if (error)
 		goto err;
 #endif
-
 
 #if defined(SUPPORT_TRUSTZONE)
 	/* 1. Change pinctrl to Active. */
@@ -704,43 +905,65 @@ static int fpc_btp_probe(struct spi_device *spi)
 	error = spi_change_pipe_owner(fpc_btp, true);
 	if (error)
 		goto err;
+
+	/* 5. Change ownership to Apss and disable clk, fabric, pinctrl */
+	error = spi_set_prepare(fpc_btp, false);
+	if(error)
+		goto err;
+
 #endif
 
-	error = fpc_btp_create_class(fpc_btp);
-	if (error)
+	/* register input device */
+	fpc_btp->input = input_allocate_device();
+	if(!fpc_btp->input) {
+		PERR("input_allocate_deivce failed.");
+		error = -ENOMEM;
 		goto err;
-
-	error = fpc_btp_create_device(fpc_btp);
-	if (error)
-		goto err;
-
-	cdev_init(&fpc_btp->cdev, &fpc_btp_fops);
-	fpc_btp->cdev.owner = THIS_MODULE;
-
-	error = cdev_add(&fpc_btp->cdev, fpc_btp->devno, fpc_btp_device_count);
-	if (error) {
-		dev_err(&fpc_btp->spi->dev, "cdev_add failed.\n");
-		goto err_chrdev;
 	}
 
-#if !defined(SUPPORT_TRUSTZONE)
-	error = fpc_btp_sleep(fpc_btp, true);
-	if (error)
-		goto err_cdev;
+	fpc_btp->input->name = "fingerprint";
+	fpc_btp->input->dev.init_name = "lge_fingerprint";
+
+#ifdef INTERRUPT_INPUT_REPORT
+	input_set_capability(fpc_btp->input, EV_REL, FPC_BTP_INTERRUPT);
+
+	error = devm_request_threaded_irq(dev, fpc_btp->irq, NULL,
+			fpc_btp_interrupt,
+			IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+			"fpc_btp", fpc_btp);
+
+	if (error) {
+		PERR("request_irq %i failed.", fpc_btp->irq);
+		fpc_btp->irq = -EINVAL;
+		goto err;
+	}
+	disable_irq(fpc_btp->irq);
+	enable_irq(fpc_btp->irq);
 #endif
-	pr_info("%s done!!\n", __func__);
+	input_set_drvdata(fpc_btp->input, fpc_btp);
+	error = input_register_device(fpc_btp->input);
+	if(error) {
+		PERR("input_register_device failed.");
+		input_free_device(fpc_btp->input);
+		goto err;
+	}
+
+	if(sysfs_create_group(&fpc_btp->input->dev.kobj, &fpc_btp_attr_group)) {
+		PERR("sysfs_create_group failed.");
+		goto err_sysfs;
+	}
+
+	PINFO("done!!");
+
 	return 0;
 
-#if !defined(SUPPORT_TRUSTZONE)
-err_cdev:
-	cdev_del(&fpc_btp->cdev);
-#endif
-err_chrdev:
-	unregister_chrdev_region(fpc_btp->devno, 1);
+err_sysfs:
+	input_free_device(fpc_btp->input);
+	input_unregister_device(fpc_btp->input);
 
 err:
+	mutex_destroy(&fpc_btp->p_mutex);
 	fpc_btp_cleanup(fpc_btp, spi);
-	pr_err("%s : error (%d) \n", __func__, error);
 	return error;
 }
 
@@ -749,45 +972,44 @@ static int fpc_btp_remove(struct spi_device *spi)
 {
 	struct fpc_btp_data_t *fpc_btp = spi_get_drvdata(spi);
 
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
 #if defined(SUPPORT_TRUSTZONE)
-	spi_change_pipe_owner(fpc_btp, false);
-	spi_set_clks(fpc_btp, false);
-	spi_set_fabric(fpc_btp, false);
-	spi_set_pinctrl(fpc_btp, false);
+	spi_set_prepare(fpc_btp, false);
 #endif
-
 	fpc_btp_sleep(fpc_btp, true);
 
-	cdev_del(&fpc_btp->cdev);
-
-	unregister_chrdev_region(fpc_btp->devno, 1);
+	sysfs_remove_group(&fpc_btp->input->dev.kobj, &fpc_btp_attr_group);
+	input_free_device(fpc_btp->input);
+	input_unregister_device(fpc_btp->input);
 
 	fpc_btp_cleanup(fpc_btp, spi);
 
 	return 0;
 }
 
+
 /* -------------------------------------------------------------------- */
 static int fpc_btp_suspend(struct device *dev)
 {
 
-	struct fpc_btp_data_t *fpc_btp = NULL;
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
 	int ret = 0;
 
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
-	fpc_btp = dev_get_drvdata(dev);
+	if(fpc_btp->pipe_owner) {
+		PERR("spi owner is TZ!!");
+	}
 
-	ret = spi_change_pipe_owner(fpc_btp, false);
+	ret = spi_set_prepare(fpc_btp, false);
+	if(ret)
+		PERR("spi_set_prepare failed.");
 
-	if (ret)
-		dev_err(dev, "change pipe owner failed !!\n");
-
-	spi_set_clks(fpc_btp, false);
-	spi_set_fabric(fpc_btp, false);
-	spi_set_pinctrl(fpc_btp, false);
+	disable_irq(fpc_btp->irq);
+	gpio_direction_output(fpc_btp->reset_gpio, 0);
+	if(fpc_btp_regulator_set(fpc_btp, false) < 0)
+		PERR("reguator off fail");
 
 	return 0;
 }
@@ -795,142 +1017,34 @@ static int fpc_btp_suspend(struct device *dev)
 /* -------------------------------------------------------------------- */
 static int fpc_btp_resume(struct device *dev)
 {
+	struct fpc_btp_data_t *fpc_btp = dev_get_drvdata(dev);
 
-	struct fpc_btp_data_t *fpc_btp = NULL;
-	int ret = 0;
+	PINFO("enter");
 
-	pr_info("%s\n", __func__);
+	if(fpc_btp_regulator_set(fpc_btp, true) < 0)
+		PERR("reguator on fail");
 
-	fpc_btp = dev_get_drvdata(dev);
+	if(fpc_btp_gpio_reset(fpc_btp))
+		PINFO("reset gpio init fail");
 
-	spi_set_pinctrl(fpc_btp, true);
-	spi_set_fabric(fpc_btp, true);
-	spi_set_clks(fpc_btp, true);
-
-	ret = spi_change_pipe_owner(fpc_btp, true);
-
-	if (ret)
-		dev_err(dev, "change pipe owner failed !!\n");
+	enable_irq(fpc_btp->irq);
 
 	return 0;
-}
-
-/* -------------------------------------------------------------------- */
-static int fpc_btp_open(struct inode *inode, struct file *file)
-{
-	struct fpc_btp_data_t *fpc_btp;
-	int error = 0;
-
-	pr_err("%s is called !!!\n", __func__);
-
-	fpc_btp = container_of(inode->i_cdev, struct fpc_btp_data_t, cdev);
-	file->private_data = fpc_btp;
-
-	return error;
-}
-
-/* -------------------------------------------------------------------- */
-static ssize_t fpc_btp_write(struct file *file, const char *buff,
-					size_t count, loff_t *ppos)
-{
-	pr_info("%s\n", __func__);
-
-	return -ENOTTY;
-}
-
-/* -------------------------------------------------------------------- */
-static ssize_t fpc_btp_read(struct file *file, char *buff,
-				size_t count, loff_t *ppos)
-{
-	int error = 0;
-	/* u32	read_cnt; */
-	/* u32	remain_cnt = 0; */
-
-	return error;
-}
-
-/* -------------------------------------------------------------------- */
-static int fpc_btp_release(struct inode *inode, struct file *file)
-{
-	struct fpc_btp_data_t *fpc_btp = file->private_data;
-	int status = 0;
-	dev_dbg(&fpc_btp->spi->dev, "%s\n", __func__);
-	pr_err("%s is called !!!\n", __func__);
-
-	return status;
-}
-
-/* -------------------------------------------------------------------- */
-static long
-fpc_btp_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
-{
-	int error = 0;
-	struct fpc_btp_data_t *fpc_btp = filp->private_data;
-
-	switch (cmd) {
-	case FPC_BTP_IOCTL_RESET:
-		error = fpc_btp_gpio_reset(fpc_btp);
-		break;
-	case FPC_BTP_IOCTL_INTR_STATUS:
-		if (copy_to_user((int *)arg, &fpc_btp->int_done, sizeof(int)))
-			return -EFAULT;
-
-		break;
-	default:
-		error = -ENOTTY;
-		break;
-	}
-
-	return error;
-}
-
-/* -------------------------------------------------------------------- */
-static unsigned int fpc_btp_poll(struct file *file, poll_table *wait)
-{
-	struct fpc_btp_data_t *fpc_btp = file->private_data;
-	unsigned int ret = 0;
-	int i = 0;
-
-	pr_info("%s\n", __func__);
-
-	pr_info("%s interrupt_done = %d\n", __func__, fpc_btp->int_done);
-
-	if (fpc_btp->int_done) {
-		for (i = 0; i < 50000; i++)
-			;
-		pr_err("interrupt_done : ture");
-		ret |= POLLHUP;
-	} else {
-		for (i = 0; i < 50000; i++)
-			;
-		pr_err("interrupt_done : false");
-		ret |= (POLLIN | POLLRDNORM);
-	}
-
-	return ret;
 }
 
 /* -------------------------------------------------------------------- */
 static int
 fpc_btp_cleanup(struct fpc_btp_data_t *fpc_btp, struct spi_device *spidev)
 {
-	dev_err(&fpc_btp->spi->dev, "%s\n", __func__);
-
-	if (!IS_ERR_OR_NULL(fpc_btp->device))
-		device_destroy(fpc_btp->class, fpc_btp->devno);
-
-	class_destroy(fpc_btp->class);
-
-	if (fpc_btp->irq >= 0)
-		free_irq(fpc_btp->irq, fpc_btp);
-
+	PINFO("enter");
+#ifdef SUPPORT_TZ_CMD_WAKELOCK
+	wake_lock_destroy(&fpc_btp->cmd_wake_lock);
+#endif
 	if (gpio_is_valid(fpc_btp->irq_gpio))
 		gpio_free(fpc_btp->irq_gpio);
 
 	if (gpio_is_valid(fpc_btp->reset_gpio))
 		gpio_free(fpc_btp->reset_gpio);
-
-	kfree(fpc_btp);
 
 	spi_set_drvdata(spidev, NULL);
 
@@ -943,18 +1057,17 @@ static int fpc_btp_reset_init(struct fpc_btp_data_t *fpc_btp,
 {
 	int error = 0;
 
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
 	if (gpio_is_valid(pdata->reset_gpio)) {
 
-		dev_info(&fpc_btp->spi->dev,
-				 "Assign HW reset -> GPIO%d\n",
+		PINFO("Assign HW reset -> GPIO%d",
 				 pdata->reset_gpio);
 
 		error = gpio_request(pdata->reset_gpio, "fpc_btp_reset");
 
 		if (error) {
-			dev_err(&fpc_btp->spi->dev, "gpio_request (reset) failed.\n");
+			PERR("gpio_request (reset) failed.");
 			return error;
 		}
 
@@ -963,11 +1076,46 @@ static int fpc_btp_reset_init(struct fpc_btp_data_t *fpc_btp,
 		error = gpio_direction_output(fpc_btp->reset_gpio, 1);
 
 		if (error) {
-			dev_err(&fpc_btp->spi->dev, "gpio_direction_output(reset) failed.\n");
+			PERR("gpio_direction_output(reset) failed.");
 			return error;
 		}
 	} else {
-		dev_err(&fpc_btp->spi->dev, "%s failed\n", __func__);
+		PERR("failed");
+	}
+
+	return error;
+}
+
+/* -------------------------------------------------------------------- */
+static int fpc_btp_cs_init(struct fpc_btp_data_t *fpc_btp,
+					struct fpc_btp_platform_data *pdata)
+{
+	int error = 0;
+
+	PINFO("enter");
+
+	if (gpio_is_valid(pdata->cs_gpio)) {
+
+		PINFO("Assign CS -> GPIO%d", pdata->cs_gpio);
+
+		error = gpio_request(pdata->cs_gpio, "fpc_btp_cs");
+
+		if (error) {
+			PERR("gpio_request (cs) failed.");
+			return error;
+		}
+
+		fpc_btp->cs_gpio = pdata->cs_gpio;
+
+		error = gpio_direction_output(fpc_btp->cs_gpio, 0);
+
+		if (error) {
+			PERR("gpio_direction_output(cs) failed.");
+			return error;
+		}
+
+	} else {
+		PERR("failed");
 	}
 
 	return error;
@@ -980,19 +1128,15 @@ fpc_btp_irq_init(struct fpc_btp_data_t *fpc_btp,
 {
 	int error = 0;
 
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
 	if (gpio_is_valid(pdata->irq_gpio)) {
 
-		dev_info(&fpc_btp->spi->dev,
-				"Assign IRQ -> GPIO%d\n",
-				pdata->irq_gpio);
+		PINFO("Assign IRQ -> GPIO%d", pdata->irq_gpio);
 
 		error = gpio_request(pdata->irq_gpio, "fpc_btp_irq");
-
 		if (error) {
-			dev_err(&fpc_btp->spi->dev,
-					"gpio_request (irq) failed.\n");
+			PERR("gpio_request (irq) failed.");
 
 			return error;
 		}
@@ -1001,8 +1145,7 @@ fpc_btp_irq_init(struct fpc_btp_data_t *fpc_btp,
 		error = gpio_direction_input(fpc_btp->irq_gpio);
 
 		if (error) {
-			dev_err(&fpc_btp->spi->dev,
-					"gpio_direction_input (irq) failed.\n");
+			PERR("gpio_direction_input (irq) failed.");
 			return error;
 		}
 	} else {
@@ -1012,25 +1155,22 @@ fpc_btp_irq_init(struct fpc_btp_data_t *fpc_btp,
 	fpc_btp->irq = gpio_to_irq(fpc_btp->irq_gpio);
 
 	if (fpc_btp->irq < 0) {
-		dev_err(&fpc_btp->spi->dev, "gpio_to_irq failed.\n");
+		PERR("gpio_to_irq failed.");
 		error = fpc_btp->irq;
 		return error;
 	}
 
+#ifndef INTERRUPT_INPUT_REPORT
 	error = request_irq(fpc_btp->irq, fpc_btp_interrupt,
 			IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
 			"fpc_btp", fpc_btp);
 
 	if (error) {
-		dev_err(&fpc_btp->spi->dev,
-				"request_irq %i failed.\n",
-				fpc_btp->irq);
-
+		PERR("request_irq %i failed.", fpc_btp->irq);
 		fpc_btp->irq = -EINVAL;
-
 		return error;
 	}
-
+#endif
 	return error;
 }
 
@@ -1041,19 +1181,19 @@ static int fpc_btp_spi_clk(struct fpc_btp_data_t *fpc_btp)
 	int error = 0;
 	struct clk *btp_clk;
 
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
 	btp_clk = clk_get(&fpc_btp->spi->dev, "fpc_xo");
 	if (IS_ERR(btp_clk)) {
 		error = PTR_ERR(btp_clk);
-		dev_err(&fpc_btp->spi->dev, "could not get clock\n");
+		PERR("could not get clock");
 		goto out_err;
 	}
 
 	/* We enable/disable the clock only to assure it works */
 	error = clk_prepare_enable(btp_clk);
 	if (error) {
-		dev_err(&fpc_btp->spi->dev, "could not enable clock\n");
+		PERR("could not enable clock");
 		goto out_err;
 	}
 	/* clk_disable_unprepare(btp_clk); */
@@ -1064,7 +1204,6 @@ out_err:
 #endif
 
 /* -------------------------------------------------------------------- */
-#ifdef CONFIG_OF
 static int fpc_btp_get_of_pdata(struct device *dev,
 					struct fpc_btp_platform_data *pdata)
 {
@@ -1074,16 +1213,15 @@ static int fpc_btp_get_of_pdata(struct device *dev,
 	u32 rst_prop = of_get_named_gpio(node, "fpc,gpio_reset", 0);
 	u32 cs_prop  = of_get_named_gpio(node, "fpc,gpio_cs",    0);
 
-
-	pr_info("%s\n", __func__);
+	PINFO("enter");
 
 	if (node == NULL) {
-		dev_err(dev, "%s: Could not find OF device node\n", __func__);
+		PERR("Could not find OF device node");
 		goto of_err;
 	}
 
 	if (!irq_prop || !rst_prop || !cs_prop) {
-		dev_err(dev, "%s: Missing OF property\n", __func__);
+		PINFO("Missing OF property");
 		goto of_err;
 	}
 
@@ -1101,32 +1239,72 @@ of_err:
 	return -ENODEV;
 }
 
-#else
-static int fpc_btp_get_of_pdata(struct device *dev,
+/* -------------------------------------------------------------------- */
+static int fpc_btp_regulator_init(struct fpc_btp_data_t *fpc_btp,
 					struct fpc_btp_platform_data *pdata)
 {
 	int error = 0;
+	struct regulator *vreg;
 
-	pdata->irq_gpio = of_get_named_gpio(dev->of_node,
-						"fpc,gpio_irq", 0);
-	pdata->reset_gpio = of_get_named_gpio(dev->of_node,
-						"fpc,gpio_reset", 0);
-	pdata->cs_gpio = of_get_named_gpio(dev->of_node,
-						"fpc,gpio_cs", 0);
+	PINFO("enter!!");
 
-	error = gpio_request(pdata->cs_gpio, "fpc_btp_cs");
-	if (error < 0)
-		pr_err("%s:Failed GPIO fpc_btp_cs request!!!\n",
-			   __func__);
+	fpc_btp->power_on = false;
+	pdata->vreg = NULL;
+	vreg = regulator_get(&fpc_btp->spi->dev, "fpc,vddio");
+	if (IS_ERR(vreg)) {
+		error = PTR_ERR(vreg);
+		PERR("Regulator get failed, error=%d", error);
+		return error;
+	}
 
-	pr_err("%s: irq(%d), reset(%d), cs(%d)\n", __func__,
-				pdata->irq_gpio,
-				pdata->reset_gpio,
-				pdata->cs_gpio);
+	if (regulator_count_voltages(vreg) > 0) {
+		error = regulator_set_voltage(vreg,
+			FPC_BTP_VOLTAGE_MIN, FPC_BTP_VOLTAGE_MAX);
+		if (error) {
+			PERR("regulator set_vtg failed error=%d", error);
+			goto err;
+		}
+	}
 
-	return 0; /* -ENODEV; */
+	if(regulator_count_voltages(vreg) > 0) {
+		error = regulator_set_optimum_mode(vreg, FPC_BTP_LOAD_UA);
+		if(error < 0) {
+			PERR("unable to set current");
+			goto err;
+		}
+	}
+	pdata->vreg = vreg;
+	return error;
+err:
+	regulator_put(vreg);
+	return error;
 }
-#endif
+
+
+/* -------------------------------------------------------------------- */
+static int fpc_btp_regulator_set(struct fpc_btp_data_t *fpc_btp, bool enable)
+{
+	int error = 0;
+	struct fpc_btp_platform_data *pdata = fpc_btp->platform_pdata;
+
+	PINFO("power %s!!", (enable) ? "on" : "off");
+
+	if(enable) {
+		if(!fpc_btp->power_on)
+			error = regulator_enable(pdata->vreg);
+	} else {
+		if(fpc_btp->power_on)
+			error = regulator_disable(pdata->vreg);
+	}
+
+	if(error < 0)
+		PERR("can't set(%d) regulator, error(%d)", enable, error);
+	else
+		fpc_btp->power_on = enable;
+
+	return error;
+}
+
 
 #ifdef FEATURE_FPC_USE_PINCTRL
 static int fpc_btp_pinctrl_init(struct fpc_btp_data_t *fpc_btp)
@@ -1137,24 +1315,22 @@ static int fpc_btp_pinctrl_init(struct fpc_btp_data_t *fpc_btp)
 	fpc_pinctrl = devm_pinctrl_get(&(fpc_btp->spi->dev));
 
 	if (IS_ERR_OR_NULL(fpc_pinctrl)) {
-		pr_err("%s: Getting pinctrl handle failed\n", __func__);
+		PERR("Getting pinctrl handle failed");
 		return -EINVAL;
 	}
 	gpio_state_suspend
 		= pinctrl_lookup_state(fpc_pinctrl, "gpio_fpc_suspend");
 
 	if (IS_ERR_OR_NULL(gpio_state_suspend)) {
-		pr_err("%s: Failed to get the suspend state pinctrl handle\n",
-				__func__);
+		PERR("Failed to get the suspend state pinctrl handle");
 		return -EINVAL;
 	}
 
 	if (pinctrl_select_state(fpc_pinctrl, gpio_state_suspend)) {
-		pr_err("%s: error on pinctrl_select_state\n", __func__);
+		PERR("error on pinctrl_select_state");
 		return -EINVAL;
 	} else {
-		pr_err("%s: success to set pinctrl_select_state\n",
-			   __func__);
+		PERR("success to set pinctrl_select_state");
 	}
 
 	return 0;
@@ -1185,21 +1361,11 @@ static int fpc_btp_gpio_reset(struct fpc_btp_data_t *fpc_btp)
 		if (!error) {
 			counter = 0;
 		} else {
-			pr_info("%s timed out,retrying ...\n", __func__);
+			PINFO("timed out,retrying ...");
 
 			udelay(1250);
 		}
 	}
-
-	disable_irq(fpc_btp->irq);
-	fpc_btp->int_done = 0;
-	enable_irq(fpc_btp->irq);
-
-	error = gpio_get_value(fpc_btp->irq_gpio) ? 0 : -EIO;
-	if (error)
-		dev_err(&fpc_btp->spi->dev, "reset failed.\n");
-	else
-		dev_dbg(&fpc_btp->spi->dev, "reset succeed.\n");
 
 	return error;
 }
@@ -1212,70 +1378,35 @@ static int fpc_btp_sleep(struct fpc_btp_data_t *fpc_btp, bool deep_sleep)
 		/* Kenel panic because gpio_set_value(fpc_btp->cs_gpio, 0); */
 		/* gpio_set_value(fpc_btp->reset_gpio, 0); */
 		gpio_direction_output(fpc_btp->reset_gpio, 0);
-		dev_dbg(&fpc_btp->spi->dev, "%s : reset_gpio -> 0\n", __func__);
+		PDEBUG("reset_gpio -> 0");
 	}
 
 	if (deep_sleep && gpio_is_valid(fpc_btp->cs_gpio)) {
 		/* gpio_set_value(fpc_btp->cs_gpio, 0); */
 		gpio_direction_output(fpc_btp->cs_gpio, 0);
-		dev_dbg(&fpc_btp->spi->dev, "%s : cs_gpio -> 0\n", __func__);
+		PDEBUG("cs_gpio -> 0");
 	}
 
-	dev_dbg(&fpc_btp->spi->dev, "%s sleep OK\n", __func__);
+	PDEBUG("sleep OK");
 
 	return 0;
-}
-
-/* -------------------------------------------------------------------- */
-static int fpc_btp_create_class(struct fpc_btp_data_t *fpc_btp)
-{
-	int error = 0;
-
-	dev_dbg(&fpc_btp->spi->dev, "%s\n", __func__);
-
-	fpc_btp->class = class_create(THIS_MODULE, FPC_BTP_CLASS_NAME);
-
-	if (IS_ERR(fpc_btp->class)) {
-		dev_err(&fpc_btp->spi->dev, "failed to create class.\n");
-		error = PTR_ERR(fpc_btp->class);
-	}
-
-	return error;
-}
-
-/* -------------------------------------------------------------------- */
-static int fpc_btp_create_device(struct fpc_btp_data_t *fpc_btp)
-{
-	int error = 0;
-
-	dev_dbg(&fpc_btp->spi->dev, "%s\n", __func__);
-
-	alloc_chrdev_region(&fpc_btp->devno, 0, 1, FPC_BTP_DEV_NAME);
-	fpc_btp_device_count++;
-
-	fpc_btp->device = device_create(fpc_btp->class, NULL,
-			fpc_btp->devno,
-			NULL, "%s", FPC_BTP_DEV_NAME);
-
-	if (IS_ERR(fpc_btp->device)) {
-		dev_err(&fpc_btp->spi->dev, "device_create failed.\n");
-		error = PTR_ERR(fpc_btp->device);
-	}
-
-	return error;
 }
 
 /* -------------------------------------------------------------------- */
 static irqreturn_t fpc_btp_interrupt(int irq, void *_fpc_btp)
 {
 	struct fpc_btp_data_t *fpc_btp = _fpc_btp;
+	int gpio_value;
 
-	if (gpio_get_value(fpc_btp->irq_gpio)) {
-		fpc_btp->int_done = 1;
-		return IRQ_HANDLED;
-	} else {
-		fpc_btp->int_done = 0;
-		return IRQ_HANDLED;
+	gpio_value = gpio_get_value(fpc_btp->irq_gpio);
+
+#ifdef INTERRUPT_INPUT_REPORT
+	if(gpio_value) {
+		input_report_rel(fpc_btp->input, FPC_BTP_INTERRUPT, 1);
+		input_sync(fpc_btp->input);
 	}
+#endif
+	return IRQ_HANDLED;
 }
 /* -------------------------------------------------------------------- */
+

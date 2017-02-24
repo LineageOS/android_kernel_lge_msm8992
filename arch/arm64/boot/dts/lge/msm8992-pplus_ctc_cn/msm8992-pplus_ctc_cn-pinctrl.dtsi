@@ -361,7 +361,7 @@
 			label = "pmx_wlan_enable";
 			/* default state */
 			pmx_wlan_enable_default: default {
-				drive-strength = <8>;
+				drive-strength = <2>;
 				bias-pull-down;
 			};
 		};
@@ -373,7 +373,7 @@
 			label = "pmx_wlan_hostwake";
 			/* default state */
 			pmx_wlan_hostwake_default: default {
-				drive-strength = <8>;
+				drive-strength = <2>;
 				bias-pull-down;
 				input-debounce = <0>;
 			};
@@ -485,6 +485,17 @@
 			seta_2: seta {
 				drive-strength = <16>;
 				bias-disable;
+			};
+		};
+	/* HIFI_AUD_EN */
+		 hifi_aud_en {
+			qcom,pins = <&gp 52>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "hifi-audio-enable";
+			audio_en: audio_en {
+				drive-strength = <4>;
+				bias-pull-up;
 			};
 		};
 
@@ -884,6 +895,18 @@
 			};
 		};
 
+		wcd9xxx_intr {
+			qcom,pins = <&gp 72>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "wcd-intr-default";
+			wcd_intr_default: default {
+				drive-strength = <2>; /* 2 MA */
+				bias-pull-down; /* pull down */
+				input-enable;
+			};
+		};
+
 		spi0_active {
 			/* MOSI, MISO, CLK */
 			qcom,pins = <&gp 0>, <&gp 1>, <&gp 3>;
@@ -1047,6 +1070,57 @@
 			};
 
 			i2c_5_sleep: i2c_5_sleep {
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		multi_spi_bus {
+			qcom,pins = <&gp 53>, <&gp 54>, <&gp 56>;
+			qcom,num-grp-pins = <3>;
+			qcom,pin-func = <2>;
+			label = "spi10-bus";
+
+			spi10_bus_active: spi10_bus_active {
+				drive-strength = <12>;
+				bias-disable;
+			};
+
+			spi10_bus_sleep: spi10_bus_sleep {
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		multi_spi_cs {
+			qcom,pins = <&gp 55>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <2>;
+			label = "spi10-cs";
+
+			spi10_cs_active: spi10_cs_active {
+				drive-strength = <4>;
+				bias-disable;
+			};
+
+			spi10_cs_sleep: spi10_cs_sleep {
+				drive-strength = <2>;
+				bias-disable;
+			};
+		};
+
+		multi_stm_cs {
+			qcom,pins = <&gp 68>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "spi10-cs";
+
+			stm_cs_active: stm_cs_active {
+				drive-strength = <4>;
+				bias-disable;
+			};
+
+			stm_cs_sleep: stm_cs_sleep {
 				drive-strength = <2>;
 				bias-disable;
 			};
@@ -1275,6 +1349,52 @@
 			};
 		};
 
+		pmx_tert_mi2s_sleep {
+			qcom,pins = <&gp 74>, <&gp 75>;
+			qcom,num-grp-pins = <2>;
+			qcom,pin-func = <0>;
+			label = "tert_mi2s_sleep";
+			tert_mi2s_sleep: tert_mi2s_sleep {
+			drive-strength = <2>;	/* 2 mA */
+			bias-pull-down;		/* PULL DOWN */
+			input-enable;
+			};
+		};
+
+		pmx_tert_mi2s_active {
+			qcom,pins = <&gp 74>, <&gp 75>;
+			qcom,num-grp-pins = <2>;
+			qcom,pin-func = <1>;
+			label = "tert_mi2s_active";
+			tert_mi2s_active: tert_mi2s_active {
+			drive-strength = <8>;	/* 8 mA */
+			bias-disable;		/* NO PULL */
+			output-high;
+			};
+		};
+
+		pmx_tert_mi2s_sd0_sleep {
+			qcom,pins = <&gp 76>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <0>;
+			label = "tert_mi2s_sd0_sleep";
+			tert_mi2s_sd0_sleep: tert_mi2s_sd0_sleep {
+			drive-strength = <2>;	/* 2 mA */
+			bias-pull-down;		/* PULL DOWN */
+			input-enable;
+			};
+		};
+
+		pmx_tert_mi2s_sd0_active {
+			qcom,pins = <&gp 76>;
+			qcom,num-grp-pins = <1>;
+			qcom,pin-func = <1>;
+			label = "tert_mi2s_sd0_active";
+			tert_mi2s_sd0_active: tert_mi2s_sd0_active {
+			drive-strength = <8>;	/* 8 mA */
+			bias-disable;		/* NO PULL */
+			};
+		};
 		pmx_quat_mi2s_sleep {
 		    qcom,pins = <&gp 58>, <&gp 59>;
 		    qcom,num-grp-pins = <2>;
@@ -1390,7 +1510,7 @@
 			};
 		};
 		irrc_rst {
-			qcom,pins = <&gp 93>;
+			qcom,pins = <&gp 37>;
 			qcom,pin-func = <0>;
 			qcom,num-grp-pins = <1>;
 			label = "uart_rst";
@@ -1653,8 +1773,8 @@
 			qcom,pin-func = <0>;
 			label = "pmx_spi_blsp12_suspend";
 			spi_blsp12_suspend: spi_blsp12_suspend {
-				drive-strength = <8>;
-				bias-pull-down;
+				drive-strength = <2>;
+				bias-disable; /* No PULL */
 			};
 		};
 
@@ -1675,8 +1795,8 @@
 			qcom,pin-func = <0>;
 			label = "pmx_spi_blsp10_suspend";
 			spi_blsp10_suspend: spi_blsp10_suspend {
-				drive-strength = <8>;
-				bias-pull-down;
+				drive-strength = <2>;
+				bias-disable; /* No PULL */
 			};
 		};
 

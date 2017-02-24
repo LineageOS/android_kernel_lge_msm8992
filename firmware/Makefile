@@ -34,6 +34,19 @@ endif
 synaptics_firmware := $(subst $(srctree)/firmware/,,$(synaptics_img_file))
 
 fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4) += $(synaptics_firmware)
+
+ifdef CONFIG_SPI_MH1
+mh1_img_file := $(wildcard $(srctree)/firmware/mh1/*.BIN)
+endif
+mh1_firmware := $(subst $(srctree)/firmware/,,$(mh1_img_file))
+fw-shipped-$(CONFIG_SPI_MH1) += $(mh1_firmware)
+
+ifdef CONFIG_SPI_CONTEXTHUB
+stm_img_file := $(wildcard $(srctree)/firmware/stm/*.BIN)
+endif
+stm_firmware := $(subst $(srctree)/firmware/,,$(stm_img_file))
+fw-shipped-$(CONFIG_SPI_MH1) += $(stm_firmware)
+
 ifdef CONFIG_TOUCHSCREEN_SIC_FW_PATH
 fwpath := $(subst ",,$(CONFIG_TOUCHSCREEN_SIC_FW_PATH))
 sic_img_file := $(wildcard $(srctree)/firmware/sic/$(fwpath)/*.img)
@@ -43,6 +56,13 @@ sic_firmware := $(subst $(srctree)/firmware/,,$(sic_img_file))
 
 fw-shipped-$(CONFIG_TOUCHSCREEN_LGE_SIC) += $(sic_firmware)
 fw-shipped-$(CONFIG_TOUCHSCREEN_LGE_SIC_SPI) += $(sic_firmware)
+ifdef CONFIG_LGE_TOUCH_FW_PATH
+fwpath := $(subst ",,$(CONFIG_LGE_TOUCH_FW_PATH))
+lge_touch_image_files := $(wildcard $(srctree)/firmware/$(fwpath)/*.img)
+lge_touch_image_files += $(wildcard $(srctree)/firmware/$(fwpath)/*.txt)
+endif
+lge_touch_firmware := $(subst $(srctree)/firmware/,,$(lge_touch_image_files))
+fw-shipped-$(CONFIG_LGE_TOUCH_CORE_BASE) += $(lge_touch_firmware)
 fw-shipped-$(CONFIG_ACENIC) += $(acenic-objs)
 fw-shipped-$(CONFIG_ADAPTEC_STARFIRE) += adaptec/starfire_rx.bin \
 					 adaptec/starfire_tx.bin
@@ -165,7 +185,7 @@ quiet_cmd_ihex  = IHEX    $@
       cmd_ihex  = $(OBJCOPY) -Iihex -Obinary $< $@
 
 quiet_cmd_copy  = COPY    $@
-      cmd_copy  = cp $(srctree)/$@ $@
+      cmd_copy  = cp -u $(srctree)/$@ $@
 quiet_cmd_ihex2fw  = IHEX2FW $@
       cmd_ihex2fw  = $(objtree)/$(obj)/ihex2fw $< $@
 

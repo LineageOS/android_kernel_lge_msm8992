@@ -72,19 +72,6 @@
 
 	};
 
-	i2c_5: i2c@f9967000 {
-		fmedia_im401@57 {
-			compatible = "fmedia,im401";
-			status = "ok";
-			reg = <0x57>;
-			interrupt-parent = <&msm_gpio>;
-			interrupts = <52 0x2>;
-			fmedia_im401,gpio_irq = <&msm_gpio 52 0>;
-			/* RT CLK */
-/*			clock-names = "fmedia_xo";            */
-/*			clocks = <&clock_rpm clk_div_clk3>;   */
-		};
-	};
 };
 
 &slim_msm {

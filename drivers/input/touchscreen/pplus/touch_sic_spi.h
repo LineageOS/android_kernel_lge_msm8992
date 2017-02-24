@@ -44,6 +44,7 @@
 #define tc_version                    (0x8A40u)
 #define tc_product_code            (0x8A41u)
 #define tc_product_id                (0x8A42u)
+#define tc_revision_info                (0x8A7Au)
 #define tc_device_ctl                  (0xC000u)
 #define tc_status                    (0x8A45u)
 
@@ -59,6 +60,7 @@
 #define spr_flash_crc_val	(0xc412u)
 #define spr_osc_ctl		(0xc417u)
 #define spr_clk_ctl		(0xc406u)
+#define spr_charger_sts		(0xC260)
 
 
 #define serial_if_ctl		(0xc010u)
@@ -72,11 +74,29 @@
 /* production test */
 #define tc_tsp_test_ctl			(0xC003)
 #define tc_tsp_test_sts			(0x8A63)
-#define tc_tsp_test_raw_data		(0x8A80)
+#define tc_tsp_test_m2_raw_data		(0x8A80)
+#define tc_tsp_test_m1_raw_data		(0xB154)
 #define tc_tsp_test_pf_result		(0x8A64)
 #define tc_tsp_test_os_result		(0x8EA4)
+#define tc_mem_sel		(0xD6A4)
+/* tune code */
+#define tc_tune_code_base		(0x8C40)
+#define tc_tune_code_size		276
+#define tc_total_ch_size		34
+#define TSP_TUNE_CODE_L_GOFT_OFFSET		0
+#define TSP_TUNE_CODE_L_M1_OFT_OFFSET		2
+#define TSP_TUNE_CODE_L_G1_OFT_OFFSET		(TSP_TUNE_CODE_L_M1_OFT_OFFSET + tc_total_ch_size)
+#define TSP_TUNE_CODE_L_G2_OFT_OFFSET		(TSP_TUNE_CODE_L_G1_OFT_OFFSET + tc_total_ch_size)
+#define TSP_TUNE_CODE_L_G3_OFT_OFFSET		(TSP_TUNE_CODE_L_G2_OFT_OFFSET + tc_total_ch_size)
+#define TSP_TUNE_CODE_R_GOFT_OFFSET		(TSP_TUNE_CODE_L_G3_OFT_OFFSET + tc_total_ch_size)
+#define TSP_TUNE_CODE_R_M1_OFT_OFFSET		(TSP_TUNE_CODE_R_GOFT_OFFSET + 2)
+#define TSP_TUNE_CODE_R_G1_OFT_OFFSET		(TSP_TUNE_CODE_R_M1_OFT_OFFSET + tc_total_ch_size)
+#define TSP_TUNE_CODE_R_G2_OFT_OFFSET		(TSP_TUNE_CODE_R_G1_OFT_OFFSET + tc_total_ch_size)
+#define TSP_TUNE_CODE_R_G3_OFT_OFFSET		(TSP_TUNE_CODE_R_G2_OFT_OFFSET + tc_total_ch_size)
+#define M2_RAWDATA_ADDR				(0x8A80u)
+#define M1_RAWDATA_ADDR				(0xB154u)
+#define BASELINE_ADDR					(0xB000u)
 
-#define RAWDATA_ADDR				(0x8A80u)
 #define rawdata_ctl_read				(0x8BE2)
 #define rawdata_ctl_write				(0xC229u)
 #if 0
@@ -155,6 +175,8 @@
 
 #define OBJECT_REPORT_ENABLE_REG_READ		(0x8BE1)
 #define OBJECT_REPORT_ENABLE_REG_WRITE		(0xC2A0)
+
+#define SYS_DISPMODE_ST				(0xD015)
 
 #define DISTANCE_INTER_TAP		(0x1 << 1) /* 2 */
 #define DISTANCE_TOUCHSLOP		(0x1 << 2) /* 4 */
@@ -458,7 +480,10 @@ enum {
 	OPEN_SHORT_ALL_TEST,
 	OPEN_NODE_TEST,
 	SHORT_NODE_TEST,
-	RAWDATA_TEST = 5,
+	DOZE1_M2_RAWDATA_TEST = 5,
+	DOZE1_M1_RAWDATA_TEST = 6,
+	DOZE2_M2_RAWDATA_TEST,
+	DOZE2_M1_RAWDATA_TEST,
 };
 
 enum {
@@ -486,6 +511,7 @@ struct sic_ts_data {
 	struct state_info		*state;
 	struct swipe_data	swipe;
 	struct tci_ctrl_data tci_ctrl;
+	struct delayed_work		work_charger;
 	u8 input[SPI_TRX_SIZE];
 	u8 output[SPI_TRX_SIZE];
 	struct mutex			spi_lock;

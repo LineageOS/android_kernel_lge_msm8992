@@ -51,6 +51,9 @@ int lge_sim_type;
 #endif
 #endif
 
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+int display_dic_rev;
+#endif
 static enum hw_rev_type lge_bd_rev = HW_REV_MAX;
 
 /* CAUTION: These strings are come from LK. */
@@ -384,6 +387,23 @@ int lge_get_lk_panel_status(void)
      return lk_panel_init_fail;
 }
 #endif
+
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+static int __init lge_lgd_sic4945_rev_setup(char *dic_cmd)
+{
+        sscanf(dic_cmd, "%d", &display_dic_rev);
+            pr_info("lge_lgd_sic4945_rev is %d\n", display_dic_rev);
+
+                return 1;
+}
+__setup("lge.dic_rev=", lge_lgd_sic4945_rev_setup);
+
+int lge_get_lgd_sic4945_rev(void)
+{
+        return display_dic_rev;
+}
+#endif
+
 /*
    for download complete using LAF image
    return value : 1 --> right after laf complete & reset

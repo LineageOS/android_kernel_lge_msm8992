@@ -16,7 +16,7 @@
 	};
 
 	soc {
-		spi_3: spi_3@f9925000{    /*BLSP-1 QUP2 */
+		spi_3: spi@f9925000{    /*BLSP-1 QUP2 */
 			status = "ok";
 			revision = "evb3...";
 			compatible = "qcom,spi-qup-v2";
@@ -30,7 +30,7 @@
 			interrupt-names = "spi_irq", "spi_bam_irq";
 			interrupts = <0 97 0>, <0 238 0>;
 
-			spi-max-frequency = <20000000>;
+			spi-max-frequency = <5000000>;
 			qcom,master-id = <86>;
 
 			clock-names = "iface_clk", "core_clk";
@@ -54,6 +54,8 @@
 			qcom,use-bam;
 			qcom,bam-consumer-pipe-index = <16>;
 			qcom,bam-producer-pipe-index = <17>;
+			qcom,rt-priority;
+			qcom,shared;
 
 		};
 
@@ -78,9 +80,47 @@
 };
 
 &spi_3 {
+	lg4945@1 {
+		compatible = "lge,lg4945";
+		status = "ok";
+		reg = <0>;
+		interrupt-parent = <&msm_gpio>;
+		interrupts = <22 0x2008>;
+		irqflags = <0x00000002>;
+		spi-max-frequency = <5000000>;
+
+		pinctrl-names = "touch_pin_active", "touch_pin_sleep";
+		pinctrl-0 = <&ts_reset_active &ts_int_active>;
+		pinctrl-1 = <&ts_reset_suspend &ts_int_suspend>;
+
+		reset-gpio = <&msm_gpio 21 0x00>;
+		irq-gpio = <&msm_gpio 22 0x2008>;
+
+		/*Caps*/
+		max_x = <1439>;
+		max_y = <2719>;
+		max_pressure = <0xff>;
+		max_width = <15>;
+		max_orientation = <1>;
+		max_id = <10>;
+
+		/*role*/
+		hw_reset_delay = <90>;
+		sw_reset_delay = <90>;
+		use_lpwg = <1>;
+		use_lpwg_test = <1>;
+
+		/* firmware */
+		use_upgrade = <1>;
+		fw_image = "sic/pplus/L0L57P1_1_50.img",
+				"sic/pplus/L0L57P1_1_35.img";
+		panel_spec = "sic/pplus/pplus_limit.txt";
+		panel_spec_mfts = "sic/pplus/pplus_limit_mfts.txt";
+	};
+
 	lg4945@0 {
 		compatible = "lgesic,lg4945"; //Manufacture, and Model
-		status = "ok";
+		status = "disable";
 		revision = "evb3...";
 		reg = <0>;
 		interrupt-parent = <&msm_gpio>;
@@ -137,10 +177,10 @@
 		jitter.curr_ratio = <115>;
 		// quickcover filter
 		quickcover.enable = <1>;
-		quickcover.X1 = <148>;
-		quickcover.X2 = <1292>;
+		quickcover.X1 = <0>;
+		quickcover.X2 = <1439>;
 		quickcover.Y1 = <0>;
-		quickcover.Y2 = <1101>;
+		quickcover.Y2 = <2719>;
 		crack.enable = <0>;
 		crack.min.cap = <300>;
 
@@ -187,16 +227,16 @@
 		reset_control = <3>;
 
 		/*Swipe Down*/
-		swp_down_min_distance = <16>;
-		swp_down_ratio_thres = <200>;
+		swp_down_min_distance = <10>;
+		swp_down_ratio_thres = <100>;
 		swp_down_ratio_chk_period = <5>;
 		swp_down_ratio_chk_min_distance = <2>;
 		swp_down_min_time_thres = <0>;
 		swp_down_max_time_thres = <150>;
-		swp_down_active_area_x0 = <0>;
+		swp_down_active_area_x0 = <401>;
 		swp_down_active_area_y0 = <0>;
 		swp_down_active_area_x1 = <1439>;
-		swp_down_active_area_y1 = <2559>;
+		swp_down_active_area_y1 = <160>;
 		/*Swipe Up*/
 		swp_up_min_distance = <10>;
 		swp_up_ratio_thres = <100>;
@@ -204,10 +244,10 @@
 		swp_up_ratio_chk_min_distance = <2>;
 		swp_up_min_time_thres = <0>;
 		swp_up_max_time_thres = <150>;
-		swp_up_active_area_x0 = <0>;
-		swp_up_active_area_y0 = <2060>;
+		swp_up_active_area_x0 = <401>;
+		swp_up_active_area_y0 = <0>;
 		swp_up_active_area_x1 = <1439>;
-		swp_up_active_area_y1 = <2559>;
+		swp_up_active_area_y1 = <160>;
 		/*firmware*/
 		need_upgrade = <1>;
 		fw_pid_addr = <0x00B8>;
@@ -221,7 +261,7 @@
 		ref_chk_option = <0 0 1 1>;
 
 		/* firmware & panel_spec path */
-		fw_image = "sic/pplus/L0L57P1_0_08.img";
+		fw_image = "sic/pplus/L0L57P1_1_14.img";
 		panel_spec = "sic/p1/p1_limit.txt";
 		panel_spec_mfts_folder = "sic/p1/p1_limit_mfts_folder.txt";
 		panel_spec_mfts_flat = "sic/p1/p1_limit_mfts_flat.txt";

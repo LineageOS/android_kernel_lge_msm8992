@@ -44,6 +44,7 @@
 #define EXT_WATCH_LUT_NUM		7
 #define EXT_WATCH_FONT_NUM_SIZE		0x500	// 1280	bytes per each '0' ~ '9'
 #define EXT_WATCH_FONT_CHAR_SIZE	0x1E0	// 480 bytes for ':'
+#define SYS_DISPMODE_STATUS		0xD015	//DIC status
 
 #define EXT_WATCH_ON			1
 #define EXT_WATCH_OFF			0
@@ -79,13 +80,18 @@ struct ext_watch_blink_area_bits { /* 0xF9C5 */
 
 struct ext_watch_grad_bits {	/* 0xF9C8 */
     u32	grad_l		: 24;
+    u32 		: 8;
     u32	grad_r		: 24;
+    u32			: 8;
 }__attribute__((packed));
 
 struct  ext_watch_lut_bits {	/* 0xF9E0 */
-	u8	b;
-	u8	g;
-	u8	r;
+	u32	b:8;
+	u32     : 24;
+	u32	g:8;
+	u32     : 24;
+	u32	r:8;
+	u32 	: 24;
 }__attribute__((packed));
 
 struct ext_watch_time_bits {

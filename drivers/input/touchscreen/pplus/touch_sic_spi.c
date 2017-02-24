@@ -646,43 +646,73 @@ error:
 
 static int set_tc_driving(struct spi_device *spi, int value)
 {
-	u32 wdata1= 0;
-	u32 wdata2= 0;
+	u32 driving_ctl = 0;
+	u8 skip_driving = 0;
+	u32 rdata = 0;
+	u32 retry = 0;
+	u32 disp_status;
+
+	struct sic_ts_data *ts = (struct sic_ts_data *)get_touch_handle(spi);
 
 	switch (value) {
 	case LCD_MODE_U0 :
-		wdata1 = 0x44;
-		wdata2 = 0x1;
+		driving_ctl = 0x1;
+		disp_status = 0x00;
 		doze_state = DOZE2_STATUS;
 		TOUCH_I("%s: LCD_MODE U0!\n", __func__);
 		break;
 	case LCD_MODE_U1 :
-		wdata1= 0x02;
-		wdata2= 0x81;
+		if (ts->pdata->mode.prev_mode == LCD_MODE_U3)
+			skip_driving = 1;
+		driving_ctl = 0x81;
+		disp_status = 0x20;
 		doze_state = DOZE1_STATUS;
 		TOUCH_I("%s: LCD_MODE U1!\n", __func__);
 		break;
 	case LCD_MODE_U2 :
-		wdata1 = 0x44;
-		wdata2 = 0x101;
+		driving_ctl = 0x101;
+		disp_status = 0x40;
 		doze_state = DOZE2_STATUS;
+		swipe_enable(ts);
 		TOUCH_I("%s: LCD_MODE U2!\n", __func__);
 		break;
 	case LCD_MODE_U3 :
-		wdata1= 0x02;
-		wdata2= 0x181;
+		if (ts->pdata->mode.prev_mode == LCD_MODE_U1)
+			skip_driving = 1;
+		driving_ctl = 0x181;
+		disp_status = 0x60;
 		doze_state = DOZE1_STATUS;
 		TOUCH_I("%s: LCD_MODE U3!\n", __func__);
 		break;
+	case LCD_MODE_U3_PARTIAL:
+		driving_ctl = 0x381;
+		disp_status = 0x60;
+		doze_state = DOZE1_STATUS;
+		TOUCH_I("%s: LCD_MODE U3 PARTIAL!\n", __func__);
+		break;
 	case DRIVING_STOP :
-		wdata2 = 0x10;
+		driving_ctl = 0x02;
 		doze_state = LOW_POWER_STATUS;
 		break;
 	}
 
-	DO_SAFE(sic_spi_write(spi, tc_device_ctl, (u8 *)&wdata1, sizeof(u32)), error);
+	if (!skip_driving) {
+		msleep(25);
+		do {
+			retry++;
+			msleep(5);
+			TOUCH_I("%s, delay until touch ic ready for mode change. retry cnt = %d",
+				__func__, retry);
+			DO_SAFE(sic_spi_read(spi, SYS_DISPMODE_ST, (u8 *)&rdata, sizeof(u32)),
+				error);
+			TOUCH_I("%s, rdata = %d, disp_status = %d\n",__func__, rdata, disp_status);
+		} while ((rdata & disp_status) != disp_status 
+			&& retry < 5
+			&& value != DRIVING_STOP);
 
-	DO_SAFE(sic_spi_write(spi, tc_driving_ctl, (u8 *)&wdata2, sizeof(u32)), error);
+		DO_SAFE(sic_spi_write(spi, tc_driving_ctl,
+			(u8 *)&driving_ctl, sizeof(u32)), error);
+	}
 
 	TOUCH_I("TC_Driving %s\n",
 		(doze_state == DOZE1_STATUS) ? "DOZE1_MODE_SET" :
@@ -692,16 +722,6 @@ static int set_tc_driving(struct spi_device *spi, int value)
 error:
 	TOUCH_E("[%s] spi fail\n", __func__);
 	return -ERROR;
-}
-
-static void set_lpwg_mode(struct lpwg_control *ctrl, int mode)
-{
-	ctrl->double_tap_enable =
-		((mode == LPWG_DOUBLE_TAP) | (mode == LPWG_PASSWORD)) ? 1 : 0;
-	ctrl->password_enable = (mode == LPWG_PASSWORD) ? 1 : 0;
-	ctrl->signature_enable = (mode == LPWG_SIGNATURE) ? 1 : 0;
-	ctrl->lpwg_is_enabled = ctrl->double_tap_enable
-		|| ctrl->password_enable || ctrl->signature_enable;
 }
 
 static int spi_clock_ctrl(struct spi_device *spi, int mode) {
@@ -771,13 +791,44 @@ static int spi_osc_power_ctrl(struct spi_device *spi, int mode) {
 	return ret;
 }
 
+void tci_deep_sleep(struct spi_device *spi, int value)
+{
+	if (value == 1) {
+		set_tc_driving(spi, DRIVING_STOP);
+		spi_clock_ctrl(spi, POWER_OFF);
+		spi_osc_power_ctrl(spi, POWER_OFF);
+	} else if (value == 0) {
+		spi_osc_power_ctrl(spi, POWER_ON);
+		spi_clock_ctrl(spi, POWER_ON);
+		//set_tc_driving(spi, LCD_MODE_U0);
+	}
+}
+EXPORT_SYMBOL(tci_deep_sleep);
+
+static void set_lpwg_mode(struct lpwg_control *ctrl, int mode)
+{
+	ctrl->double_tap_enable =
+		((mode == LPWG_DOUBLE_TAP) | (mode == LPWG_PASSWORD)) ? 1 : 0;
+	ctrl->password_enable = (mode == LPWG_PASSWORD) ? 1 : 0;
+	ctrl->signature_enable = (mode == LPWG_SIGNATURE) ? 1 : 0;
+	ctrl->lpwg_is_enabled = ctrl->double_tap_enable
+		|| ctrl->password_enable || ctrl->signature_enable;
+}
+
 static int lpwg_control(struct sic_ts_data *ts, int mode)
 {
 	struct tci_ctrl_info *tci1 = &ts->tci_ctrl.tci1;
 	struct tci_ctrl_info *tci2 = &ts->tci_ctrl.tci2;
 
+	if (ts->pdata->mode.curr_mode == LCD_MODE_U3 && !ts->lpwg_ctrl.screen) {
+		ts->pdata->mode.prev_mode = LCD_MODE_U3;
+		ts->pdata->mode.curr_mode = LCD_MODE_U3_PARTIAL;
+		mode = ts->lpwg_ctrl.lpwg_mode;
+	}
+
 	set_lpwg_mode(&ts->lpwg_ctrl, mode);
 	sensor_state = 1;
+
 
 	switch (mode) {
 	case LPWG_SIGNATURE:
@@ -813,8 +864,7 @@ static int lpwg_control(struct sic_ts_data *ts, int mode)
 				swipe_disable(ts);
 
 			//DO_SAFE(tci_control(ts, DOZE2_MODE_SET), error);
-			DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)
-					, error);
+			//DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)	, error);
 		}
 #if 0
 		else {
@@ -852,8 +902,7 @@ static int lpwg_control(struct sic_ts_data *ts, int mode)
 				swipe_disable(ts);
 
 			//DO_SAFE(tci_control(ts, DOZE2_MODE_SET), error);
-			DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)
-					, error);
+			//DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)	, error);
 		}
 #if 0
 		else {
@@ -866,6 +915,7 @@ static int lpwg_control(struct sic_ts_data *ts, int mode)
 		DO_SAFE(tci_control(ts, TCI_ENABLE_CTRL), error);
 		swipe_disable(ts);
 		/* because of swipe - notify to Touch IC about swipe resume*/
+		/*
 		if (ts->pdata->swipe_pwr_ctr == WAIT_TOUCH_PRESS) {
 			u8 wdata = 0x08;
 			if (sic_spi_write(ts->spi_device, tc_device_ctl,
@@ -876,11 +926,14 @@ static int lpwg_control(struct sic_ts_data *ts, int mode)
 			TOUCH_I("%s notify Touch IC swipe resume\n", __func__);
 		} else {
 			//DO_SAFE(tci_control(ts, DOZE1_MODE_SET), error);
-			DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)
+			//DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)
 					, error);
-		}
+		}*/
 		break;
 	}
+
+	DO_SAFE(set_tc_driving(ts->spi_device, ts->pdata->mode.curr_mode)
+						, error);
 
 	TOUCH_I("%s : lpwg_mode[%d/%d]\n", __func__,
 			mode, ts->lpwg_ctrl.lpwg_mode);
@@ -898,6 +951,11 @@ static int lpwg_update_all(struct sic_ts_data *ts)
 	int lpwg_status = -1;
 
 	if (ts->lpwg_ctrl.screen) {
+		if (ts->pdata->mode.curr_mode == LCD_MODE_U3_PARTIAL) {
+			ts->pdata->mode.prev_mode = LCD_MODE_U3_PARTIAL;
+			ts->pdata->mode.curr_mode = LCD_MODE_U3;
+			lpwg_status = 0;
+		}
 #if 0
 		if ((atomic_read(&ts->lpwg_ctrl.is_suspend) == TC_STATUS_RESUME) &&
 				(ts->is_init == 1)) {
@@ -951,26 +1009,16 @@ static int lpwg_update_all(struct sic_ts_data *ts)
 	}
 
 	if (ic_status == 0) {	/* NEAR, no need to LPWG Set */
-#if 0
-		if (atomic_read(&ts->lpwg_ctrl.is_suspend)
-				== TC_STATUS_SUSPEND) {
-			touch_sleep_status(ts->spi_device, 1);
-			tci_control(ts, LOW_POWER_CTRL);
+		if (ts->pdata->mode.curr_mode == LCD_MODE_U0) {
+			tci_deep_sleep(ts->spi_device, 1);
 		} else {
-			set_tc_driving(ts->spi_device, TC_STOP);
+			set_tc_driving(ts->spi_device, DRIVING_STOP);
 		}
+		
 		sensor_state = 0;
-#endif
 	} else if (ic_status == 1) {	/* FAR, LPWG Set */
-#if 0
-		if (atomic_read(&ts->lpwg_ctrl.is_suspend)
-				== TC_STATUS_SUSPEND) {
-			touch_sleep_status(ts->spi_device, 0);
-		} else {
-			set_tc_driving(ts->spi_device, TC_RESTART);
-		}
+		tci_deep_sleep(ts->spi_device, 0);
 		lpwg_status = ts->lpwg_ctrl.lpwg_mode;
-#endif
 	} else if (ic_status == 2) {
 #if 0
 		sic_ts_power(ts->spi_device, POWER_OFF);
@@ -1070,7 +1118,7 @@ static void get_swipe_info(struct sic_ts_data *ts)
 	swp->up.active_area_x1 = ts->pdata->swp_up_caps->active_area_x1;
 	swp->up.active_area_y1 = ts->pdata->swp_up_caps->active_area_y1;
 
-	swp->swipe_mode = 0;	/*SWIPE_DOWN_BIT;*//* | SWIPE_UP_BIT*/;
+	swp->swipe_mode = SWIPE_UP_BIT;	/*SWIPE_DOWN_BIT;*//* | SWIPE_UP_BIT*/;
 }
 
 static int get_ic_info(struct sic_ts_data *ts)
@@ -1088,6 +1136,14 @@ static int get_ic_info(struct sic_ts_data *ts)
 		ts->fw_info.fw_version[1],
 		(rdata >> 16) & 0xFF,
 		(rdata >> 24) & 0xFF);
+
+	DO_SAFE(sic_spi_read(ts->spi_device, tc_revision_info,
+				(u8 *)&rdata, sizeof(u32)), error);
+	ts->fw_info.fw_revision = rdata & 0xFF;
+	if (ts->fw_info.fw_revision == 0xFF)
+		TOUCH_D(DEBUG_BASE_INFO, "IC_Revision: Unknown. Flash Erased\n");
+	else
+		TOUCH_D(DEBUG_BASE_INFO, "IC_Revision: %d\n", ts->fw_info.fw_revision);
 
 	DO_SAFE(sic_spi_read(ts->spi_device, tc_product_id,
 				(u8 *)&ts->fw_info.fw_product_id, 8), error);
@@ -1174,6 +1230,15 @@ static ssize_t show_firmware(struct spi_device *spi, char *buf)
 	ret += snprintf(buf+ret, PAGE_SIZE - ret, "IC_fw_version : v%d.%02d\n",
 				ts->fw_info.fw_version[0],
 				ts->fw_info.fw_version[1]);
+
+	if (ts->fw_info.fw_revision == 0xFF) {
+		ret += snprintf(buf+ret, PAGE_SIZE - ret,
+			"IC_revision[Unknown. Flash Erased]\n");
+	} else {
+		ret += snprintf(buf+ret, PAGE_SIZE - ret,
+			"IC_revision[%d]\n", ts->fw_info.fw_revision);
+	}
+
 	ret += snprintf(buf+ret, PAGE_SIZE - ret, "IC_product_id[%s]\n",
 				ts->fw_info.fw_product_id);
 #if 0
@@ -1221,6 +1286,15 @@ static ssize_t show_sic_fw_version(struct spi_device *spi, char *buf)
 				"version : v%d.%02d\n",
 				ts->fw_info.fw_version[0],
 				ts->fw_info.fw_version[1]);
+
+	if (ts->fw_info.fw_revision == 0xFF) {
+		ret += snprintf(buf+ret, PAGE_SIZE - ret,
+			"IC_revision[Unknown. Flash Erased]\n");
+	} else {
+		ret += snprintf(buf+ret, PAGE_SIZE - ret,
+			"IC_revision[%d]\n", ts->fw_info.fw_revision);
+	}
+
 	ret += snprintf(buf+ret, PAGE_SIZE - ret,
 				"IC_product_id[%s]\n\n",
 				ts->fw_info.fw_product_id);
@@ -1642,7 +1716,7 @@ static ssize_t get_data(struct sic_ts_data *ts, int16_t *buf, u32 wdata)
 	if (__frame_size % 4)
 		__frame_size = (((__frame_size >> 2) + 1) << 2);
 
-	DO_SAFE(sic_spi_read(ts->spi_device, RAWDATA_ADDR,
+	DO_SAFE(sic_spi_read(ts->spi_device, M2_RAWDATA_ADDR,
 				(u8 *)buf, __frame_size), error);
 
 	return 0;
@@ -1650,6 +1724,33 @@ static ssize_t get_data(struct sic_ts_data *ts, int16_t *buf, u32 wdata)
 error:
 	return -EIO;
 }
+
+static ssize_t get_baseline_data
+	(struct sic_ts_data *ts, int16_t *buf, u32 wdata)
+{
+	int __frame_size = ROW_SIZE*COL_SIZE*RAWDATA_SIZE;
+
+	/* write 1 : GETBASELINEDATA */
+
+	TOUCH_I("======== get data ========\n");
+
+	DO_SAFE(sic_spi_write(ts->spi_device,
+		tc_mem_sel, (u8 *)&wdata, sizeof(wdata)), error);
+	TOUCH_I("spi_write, wdata = %d\n", wdata);
+
+	/*read data*/
+	if (__frame_size % 4)
+		__frame_size = (((__frame_size >> 2) + 1) << 2);
+
+	DO_SAFE(sic_spi_read(ts->spi_device, BASELINE_ADDR,
+				(u8 *)buf, __frame_size), error);
+
+	return 0;
+
+error:
+	return -EIO;
+}
+
 static ssize_t show_tci_fail_reason(struct spi_device *spi, char *buf)
 {
 	int ret = 0;
@@ -1710,7 +1811,6 @@ static ssize_t store_tci_fail_reason(struct spi_device *spi,
 
 	return count;
 }
-
 static ssize_t show_swipe_fail_reason(struct spi_device *spi, char *buf)
 {
 	int ret = 0;
@@ -2044,6 +2144,8 @@ error:
 int prd_os_xline_result_read(struct spi_device *spi,
 					u8 (*result_buffer)[ROW_SIZE], int type)
 {
+	struct sic_ts_data *ts =
+				(struct sic_ts_data *)get_touch_handle(spi);
 	int i;
 	int j;
 	u32 buffer[COL_SIZE] = {0,};
@@ -2051,12 +2153,12 @@ int prd_os_xline_result_read(struct spi_device *spi,
 	u8 write_value = 0x0;
 
 	switch (type) {
-	case OPEN_NODE_TEST:
-		write_value = 0x1;
-		break;
-	case SHORT_NODE_TEST:
-		write_value = 0x2;
-		break;
+		case OPEN_NODE_TEST:
+			write_value = 0x1;
+			break;
+		case SHORT_NODE_TEST:
+			write_value = 0x2;
+			break;
 	}
 
 	ret = prd_os_result_get(spi, buffer);
@@ -2070,7 +2172,23 @@ int prd_os_xline_result_read(struct spi_device *spi,
 			}
 		}
 	}
+	sic_spi_read(ts->spi_device, 0x8C40,
+				(u8 *)sicImage, COL_SIZE*ROW_SIZE*2);
 
+	for (i = 0 ; i < COL_SIZE ; i++) {
+		char log_buf[LOG_BUF_SIZE] = {0,};
+		int log_ret = 0;
+
+		log_ret += snprintf(log_buf + log_ret,
+					LOG_BUF_SIZE - log_ret, "[%2d]  ", i);
+
+		for (j = 0 ; j < ROW_SIZE ; j++) {
+			log_ret += snprintf(log_buf + log_ret,
+						LOG_BUF_SIZE - log_ret, "%5d ",
+						(int)(sicImage[i][j]));
+		}
+		TOUCH_I("%s\n", log_buf);
+	}
 	return ret;
 }
 
@@ -2279,7 +2397,7 @@ int prd_compare_rawdata(struct spi_device *spi,
 			ret += snprintf(buf + ret,
 					buffer_length - ret, "%5d ",
 					sicImage[i][j]);
-			if (sicImage[i][j] < min)
+			if (sicImage[i][j] != 0 && sicImage[i][j] < min)
 				min = sicImage[i][j];
 			if (sicImage[i][j] > max)
 				max = sicImage[i][j];
@@ -2291,6 +2409,7 @@ int prd_compare_rawdata(struct spi_device *spi,
 
 	/* production test : file write */
 	if (is_prod_test == PRODUCTION_MODE) {
+		ret += snprintf(buf + ret, buffer_length - ret, "\n[RAWDATA] min : %5d , max : %5d\n", min, max);
 		write_file(NULL, buf, 0, 1);
 		memset(buf, 0, sizeof(Write_Buffer));
 		ret = result;
@@ -2330,23 +2449,56 @@ int prd_compare_rawdata(struct spi_device *spi,
 	return ret;
 }
 
-int prd_frame_read(struct spi_device *spi)
+int prd_frame_read(struct spi_device *spi, u8 type)
 {
 	struct sic_ts_data *ts =
 			(struct sic_ts_data *)get_touch_handle(spi);
 
-	int __frame_size = ROW_SIZE*COL_SIZE*RAWDATA_SIZE;
-
+	int __m1_frame_size = COL_SIZE*2;
+	int __m2_frame_size = ROW_SIZE*COL_SIZE*RAWDATA_SIZE;
+//	int wdata;
+//	u16 readbuf[2][COL_SIZE];
 	memset(sicImage, 0, sizeof(sicImage));
 
-	if (__frame_size % 4)
-		__frame_size = (((__frame_size >> 2) + 1) << 2);
-
-	DO_SAFE(sic_spi_read(ts->spi_device,
-				tc_tsp_test_raw_data,
+	if (__m1_frame_size % 4)
+		__m1_frame_size = (((__m1_frame_size >> 2) + 1) << 2);
+	if (__m2_frame_size % 4)
+		__m2_frame_size = (((__m2_frame_size >> 2) + 1) << 2);
+	switch (type) {
+	case DOZE1_M1_RAWDATA_TEST:
+	case DOZE2_M1_RAWDATA_TEST:
+		DO_SAFE(sic_spi_read(ts->spi_device,
+				tc_tsp_test_m1_raw_data,
 				(u8 *)&sicImage,
-				__frame_size), error);
+				__m1_frame_size), error);
+		/*
+		wdata = 0;
+		DO_SAFE(sic_spi_write(ts->spi_device,
+				tc_mem_sel,(u8 *)&wdata, sizeof(u32)), error);
+		if(DO_SAFE(sic_spi_read(ts->spi_device,
+					tc_tsp_test_m1_raw_data,
+					(u8 *)&readbuf[0][0], COL_SIZE*2), error) != COL_SIZE*2) {
+			return -ERROR;
+		}
+		wdata = 1;
+		DO_SAFE(sic_spi_write(ts->spi_device,
+				tc_mem_sel,(u8 *)&wdata, sizeof(u32)), error);
+		if(DO_SAFE(sic_spi_read(ts->spi_device,
+					tc_tsp_test_m1_raw_data,
+					(u8 *)&readbuf[1][0], COL_SIZE*2), error) != COL_SIZE*2) {
+			return -ERROR;
+		}
+		*/
+		break;
 
+	case DOZE1_M2_RAWDATA_TEST:
+	case DOZE2_M2_RAWDATA_TEST:
+		DO_SAFE(sic_spi_read(ts->spi_device,
+				tc_tsp_test_m2_raw_data,
+				(u8 *)&sicImage,
+				__m2_frame_size), error);
+		break;
+	}
 	return NO_ERROR;
 error:
 	TOUCH_E("i2c fail\n");
@@ -2359,23 +2511,32 @@ void prd_pass_fail_result_print(u8 type, u32 result)
 	unsigned char buffer[LOG_BUF_SIZE] = {0,};
 
 	switch (type) {
-	case OPEN_SHORT_ALL_TEST:
-		TOUCH_I("[Open Short All Test] - %s (%d/%d)\n",
-			(result == 0) ?	"Pass" : "Fail",
-			((result & 0x1) == 0x1) ? 0 : 1,
-			((result & 0x2) == 0x2) ? 0 : 1);
-		ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
-			"Open Short All Test : %s (%d/%d)\n",
-			(result == 0) ?	"Pass" : "Fail",
-			((result & 0x1) == 0x1) ? 0 : 1,
-			((result & 0x2) == 0x2) ? 0 : 1);
-		break;
-	case RAWDATA_TEST:
-		TOUCH_I("[Rawdata Test] - %s\n\n", result ? "Fail" : "Pass");
-		ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
-				"Rawdata Test %s\n\n",
-				result ? "Fail" : "Pass");
-		break;
+		case OPEN_SHORT_ALL_TEST:
+			TOUCH_I("[Open Short All Test] - %s (%d/%d)\n",
+					(result == 0) ?	"Pass" : "Fail",
+					((result & 0x1) == 0x1) ? 0 : 1,
+					((result & 0x2) == 0x2) ? 0 : 1);
+			ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+					"Open Short All Test : %s (%d/%d)\n",
+					(result == 0) ?	"Pass" : "Fail",
+					((result & 0x1) == 0x1) ? 0 : 1,
+					((result & 0x2) == 0x2) ? 0 : 1);
+			break;
+
+		case DOZE1_M1_RAWDATA_TEST:
+		case DOZE2_M1_RAWDATA_TEST:
+			TOUCH_I("[M1 Rawdata Test] - %s\n\n", result ? "Fail" : "Pass");
+			ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+					"M1 Rawdata Test %s\n\n",
+					result ? "Fail" : "Pass");
+			break;
+
+		case DOZE1_M2_RAWDATA_TEST:
+		case DOZE2_M2_RAWDATA_TEST:
+			TOUCH_I("[M2 Rawdata Test] - %s\n\n", result ? "Fail" : "Pass");
+			ret += snprintf(buffer + ret, LOG_BUF_SIZE - ret,
+					"M2 Rawdata Test %s\n\n",
+					result ? "Fail" : "Pass");
 	}
 
 	write_file(NULL, buffer, 0, 1);
@@ -2392,19 +2553,32 @@ int write_test_mode(struct spi_device *spi, u8 type)
 	int waiting_time = 10;
 
 	switch (type) {
-	case OPEN_NODE_TEST:
-		waiting_time = 300;
-		break;
+		case OPEN_NODE_TEST:
+			testmode = (doze_mode << 8) + type;
+			waiting_time = 300;
+			break;
 
-	case SHORT_NODE_TEST:
-		waiting_time = 100;
-		break;
+		case SHORT_NODE_TEST:
+			testmode = (doze_mode << 8) + type;
+			waiting_time = 100;
+			break;
 
-	case RAWDATA_TEST:
-		break;
+		case DOZE1_M1_RAWDATA_TEST:
+		case DOZE1_M2_RAWDATA_TEST:
+			testmode = (doze_mode << 8) + type;
+			break;
+
+		case DOZE2_M1_RAWDATA_TEST:
+			type = 0x6;
+			testmode = (doze_mode << 9) + type;
+			break;
+
+		case DOZE2_M2_RAWDATA_TEST:
+			type = 0x5;
+			testmode = (doze_mode << 9) + type;
+			break;
 	}
 
-	testmode = (doze_mode << 8) + type;
 	/* TestType Set */
 	DO_SAFE(sic_spi_write(ts->spi_device,
 			tc_tsp_test_ctl,
@@ -2505,35 +2679,130 @@ int open_short_all_test(struct spi_device *spi) {
 	return openshort_all_result;
 }
 
+void tune_display(char *tc_tune_code, int offset, int type)
+{
+	char log_buf[tc_tune_code_size] = {0,};
+	int ret = 0;
+	int i;
+	char temp[tc_tune_code_size] = {0,};
+	switch(type) {
+		case 1:
+			ret = snprintf(log_buf, tc_tune_code_size,
+					"GOFT tune_code_read : ");
+			if((tc_tune_code[offset] >> 4) == 1) {
+				temp[offset] = tc_tune_code[offset] - (0x1 << 4);
+				ret += snprintf(log_buf + ret, tc_tune_code_size - ret,
+						"-%d  ",
+						temp[offset]);
+			}
+			else {
+				ret += snprintf(log_buf + ret, tc_tune_code_size - ret,
+						" %d  ",
+						tc_tune_code[offset]);
+			}
+			TOUCH_I("%s\n", log_buf);
+			ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+			write_file(NULL, log_buf, 0, 1);
+			break;
+		case 2:
+			ret = snprintf(log_buf, tc_tune_code_size,
+					"LOFT tune_code_read : ");
+			for(i = 0; i < tc_total_ch_size; i++) {
+				if((tc_tune_code[offset+i]) >> 5 == 1) {
+					temp[offset+i] = tc_tune_code[offset+i] - (0x1 << 5);
+					ret += snprintf(log_buf + ret, tc_tune_code_size - ret,
+							"-%d  ",
+							temp[offset+i]);
+				}
+				else {
+					ret += snprintf(log_buf + ret, tc_tune_code_size - ret,
+							" %d  ",
+							tc_tune_code[offset+i]);
+				}
+			}
+			TOUCH_I("%s\n", log_buf);
+			ret += snprintf(log_buf + ret, tc_tune_code_size - ret, "\n");
+			write_file(NULL, log_buf, 0, 1);
+			break;
+	}
+}
 
+
+void read_tune_code(struct sic_ts_data *ts, u8 type)
+{
+	u8 tune_code_read_buf[276] = {0,};
+	sic_spi_read(ts->spi_device, tc_tune_code_base,
+				(u8 *)&tune_code_read_buf[0], tc_tune_code_size);
+
+	switch(type) {
+		case DOZE1_M1_RAWDATA_TEST:
+		case DOZE2_M1_RAWDATA_TEST:
+			write_file(NULL, "[Read Tune Code]\n", 0, 1);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_L_GOFT_OFFSET, 1);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_R_GOFT_OFFSET, 1);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_L_M1_OFT_OFFSET, 2);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_R_M1_OFT_OFFSET, 2);
+			break;
+
+		case DOZE1_M2_RAWDATA_TEST:
+		case DOZE2_M2_RAWDATA_TEST:
+			write_file(NULL, "[Read Tune Code]\n", 0, 1);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_L_GOFT_OFFSET+1, 1);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_R_GOFT_OFFSET+1, 1);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_L_G1_OFT_OFFSET, 2);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_L_G2_OFT_OFFSET, 2);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_L_G3_OFT_OFFSET, 2);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_R_G1_OFT_OFFSET, 2);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_R_G2_OFT_OFFSET, 2);
+			tune_display(tune_code_read_buf, TSP_TUNE_CODE_R_G3_OFT_OFFSET, 2);
+			break;
+		}
+
+}
 int production_test(struct spi_device *spi, u8 type)
 {
 	u32 result = 1;
 	int ret;
+	struct sic_ts_data *ts =
+			(struct sic_ts_data *)get_touch_handle(spi);
 
 	memset(Write_Buffer, 0, BUFFER_SIZE);
 
 	/* Read Test Result : pass(0),fail(1) */
 	switch (type) {
-	case OPEN_SHORT_ALL_TEST:
-		result = open_short_all_test(spi);
-		break;
+		case OPEN_SHORT_ALL_TEST:
+			result = open_short_all_test(spi);
+			break;
 
-	case RAWDATA_TEST:
-		ret = write_test_mode(spi, type);
-		if (ret < 0) {
-			TOUCH_E("production test couldn't be done\n");
-			goto error;
-		}
-		DO_SAFE(prd_frame_read(spi), error);
-		result = prd_compare_rawdata(spi, Write_Buffer,
-						PRODUCTION_MODE);
-		break;
+		case DOZE1_M1_RAWDATA_TEST:
+		case DOZE2_M1_RAWDATA_TEST:
+			/*
+			ret = write_test_mode(spi, type);
+			if (ret < 0) {
+				TOUCH_E("production test couldn't be done\n");
+				goto error;
+			}
+			DO_SAFE(prd_frame_read(spi, type), error);
+			result = prd_compare_rawdata(spi, Write_Buffer,
+					PRODUCTION_MODE);
+			break;
+			*/
+		case DOZE1_M2_RAWDATA_TEST:
+		case DOZE2_M2_RAWDATA_TEST:
+			ret = write_test_mode(spi, type);
+			if (ret < 0) {
+				TOUCH_E("production test couldn't be done\n");
+				goto error;
+			}
+			DO_SAFE(prd_frame_read(spi, type), error);
+			result = prd_compare_rawdata(spi, Write_Buffer,
+					PRODUCTION_MODE);
+			break;
 	}
 
 error:
 	prd_pass_fail_result_print(type, result);
-
+	read_tune_code(ts, type);
 	return result;
 }
 
@@ -2584,46 +2853,54 @@ static ssize_t show_sd(struct spi_device *spi, char *buf)
 			(struct sic_ts_data *)get_touch_handle(spi);
 
 	int openshort_ret = 0;
-	int rawdata_ret = 0;
+	int m2_rawdata_ret = 0;
 	int ret = 0;
+	u32 trim_result = 0;
+	u32 wdata;
+	int result = 0;
 	/* file create , time log */
 	write_file(NULL, "", 1, 1);
 
+	// LCD off
 	if (atomic_read(&ts->lpwg_ctrl.is_suspend)) {
 		ret = snprintf(buf + ret,
 				PAGE_SIZE - ret,
-				"state=[suspend]. we cannot use I2C, now. Test Result: Fail\n\n");
-		write_file(NULL, buf, 0, 1);
-		TOUCH_I("%s : %s", __func__, buf);
+				"LCD Off. Test Result: Fail\n");
 		return ret;
 	}
+
 	/* firmware version log */
 	firmware_version_log(ts);
 	mutex_lock(&ts->pdata->thread_lock);
 	sic_ts_init_prod_test(ts);
 
-	write_file(NULL, "[RAWDATA_TEST]\n", 0, 1);
-	rawdata_ret = production_test(spi, RAWDATA_TEST);
-	write_file(NULL, "[OPEN_SHORT_ALL_TEST]\n", 0, 1);
+	/* OSC Trimming */
+	wdata = 0xEAEA0800;
+	sic_spi_write(spi, tc_device_ctl,
+			(u8 *)&wdata, sizeof(u32));
+	result = sic_spi_read(spi, 0xD6A9, (u8 *)&trim_result, sizeof(trim_result));
+	if (result > 10) {
+		TOUCH_I("OSC Trimming fail. trim_result = %d\n", result);
+		return ret;
+	}
+
+	write_file(NULL, "[M2_RAWDATA_TEST]", 0, 1);
+	m2_rawdata_ret = production_test(spi, DOZE1_M2_RAWDATA_TEST);
+	write_file(NULL, "\n[OPEN_SHORT_ALL_TEST]\n", 0, 1);
 	openshort_ret = production_test(spi, OPEN_SHORT_ALL_TEST);
-
-	ret = snprintf(buf,
-		PAGE_SIZE,
-		"========RESULT=======\n");
-
+	ret = snprintf(buf,PAGE_SIZE,"========RESULT=======\n");
 	ret += snprintf(buf + ret, PAGE_SIZE - ret,
-			"Raw Data : %s\n", rawdata_ret ? "Fail" : "Pass");
-
+			"M2 Raw Data : %s\n", m2_rawdata_ret ? "Fail" : "Pass");
 	if (openshort_ret == 0) {
 		ret += snprintf(buf + ret, PAGE_SIZE - ret,
 				"Channel Status : %s\n", "Pass");
-	} else {
+	}
+	else {
 		ret += snprintf(buf + ret, PAGE_SIZE - ret,
 				"Channel Status : %s (%d/%d)\n", "Fail",
 				((openshort_ret & 0x1) == 0x1) ? 0 : 1,
 				((openshort_ret & 0x2) == 0x2) ? 0 : 1);
 	}
-
 	sic_ts_exit_prod_test(ts);
 	mutex_unlock(&ts->pdata->thread_lock);
 
@@ -2632,13 +2909,14 @@ static ssize_t show_sd(struct spi_device *spi, char *buf)
 	return ret;
 }
 
-#if 0
+
 static ssize_t show_lpwg_sd(struct spi_device *spi, char *buf)
 {
 	struct sic_ts_data *ts =
 			(struct sic_ts_data *)get_touch_handle(spi);
 
-	int lpwg_ret = 0;
+	int m1_rawdata_ret = 0;
+	int m2_rawdata_ret = 0;
 	int ret = 0;
 
 	/* file create , time log */
@@ -2647,8 +2925,10 @@ static ssize_t show_lpwg_sd(struct spi_device *spi, char *buf)
 	mutex_lock(&ts->pdata->thread_lock);
 	sic_ts_init_prod_test(ts);
 
-	write_file(NULL, "[LPWG_RAWDATA_TEST]\n", 0, 1);
-	lpwg_ret = production_test(spi, RAWDATA_DOZE2);
+	write_file(NULL, "[M2_RAWDATA_TEST]\n", 0, 1);
+	m2_rawdata_ret = production_test(spi, DOZE2_M2_RAWDATA_TEST);
+	write_file(NULL, "[M1_RAWDATA_TEST]\n", 0, 1);
+	m1_rawdata_ret = production_test(spi, DOZE2_M1_RAWDATA_TEST);
 
 	ret = snprintf(buf,
 		PAGE_SIZE,
@@ -2656,8 +2936,14 @@ static ssize_t show_lpwg_sd(struct spi_device *spi, char *buf)
 
 	ret += snprintf(buf + ret,
 			PAGE_SIZE - ret,
-			"LPWG RawData : %s\n",
-			lpwg_ret ? "FAIL" : "PASS");
+			"M1 RawData : %s\n",
+			m1_rawdata_ret ? "FAIL" : "PASS");
+
+	ret += snprintf(buf + ret,
+			PAGE_SIZE - ret,
+			"M2 RawData : %s\n",
+			m2_rawdata_ret ? "FAIL" : "PASS");
+
 
 	sic_ts_exit_prod_test(ts);
 	mutex_unlock(&ts->pdata->thread_lock);
@@ -2666,7 +2952,6 @@ static ssize_t show_lpwg_sd(struct spi_device *spi, char *buf)
 
 	return ret;
 }
-#endif
 
 static ssize_t show_fdata(struct spi_device *spi, char *buf)
 {
@@ -2674,7 +2959,7 @@ static ssize_t show_fdata(struct spi_device *spi, char *buf)
 			(struct sic_ts_data *)get_touch_handle(spi);
 	int ret = 0;
 	int ret2 = 0;
-	u8 type = RAWDATA_TEST;
+	u8 type = DOZE1_M2_RAWDATA_TEST;
 
 	if (atomic_read(&ts->lpwg_ctrl.is_suspend)) {
 		ret = snprintf(buf + ret,
@@ -2696,7 +2981,7 @@ static ssize_t show_fdata(struct spi_device *spi, char *buf)
 		return ret;
 	}
 
-	prd_frame_read(spi);
+	prd_frame_read(spi, type);
 	ret = prd_compare_rawdata(spi, buf, NORMAL_MODE);
 
 	sic_ts_exit_prod_test(ts);
@@ -2871,6 +3156,61 @@ error:
 	return ret;
 }
 
+static ssize_t show_baseline_data(struct spi_device *spi, char *buf)
+{
+	struct sic_ts_data *ts =
+			(struct sic_ts_data *)get_touch_handle(spi);
+	int ret = 0;
+	int ret2 = 0;
+	int16_t *rawdata = NULL;
+	int i = 0;
+	int j = 0;
+	u8 flat = 0;
+
+	rawdata = kzalloc(sizeof(int16_t) * (COL_SIZE*ROW_SIZE), GFP_KERNEL);
+
+	if (rawdata == NULL) {
+		TOUCH_E("mem_error\n");
+		return ret;
+	}
+
+	ret = snprintf(buf, PAGE_SIZE, "======== baseline_data ========\n");
+
+	ret2 = get_baseline_data(ts, rawdata, 1);  /* 1 == baseline_data */
+	if (ret2 < 0) {
+		TOUCH_E("Test fail (Check if LCD is OFF)\n");
+		ret += snprintf(buf + ret, PAGE_SIZE - ret,
+				"Test fail (Check if LCD is OFF)\n");
+		goto error;
+	}
+
+	for (i = 0 ; i < COL_SIZE ; i++) {
+		char log_buf[LOG_BUF_SIZE] = {0,};
+		int log_ret = 0;
+
+		ret += snprintf(buf + ret, PAGE_SIZE - ret, "[%2d] ", i);
+		log_ret += snprintf(log_buf + log_ret,
+					LOG_BUF_SIZE - log_ret, "[%2d]  ", i);
+
+		for (j = 0 ; j < ROW_SIZE; j++) {
+			flat = ROW_SIZE-1-j;	/* the data be flatted */
+			ret += snprintf(buf + ret, PAGE_SIZE - ret,
+					"%5d ", rawdata[i*ROW_SIZE+flat]);
+			log_ret += snprintf(log_buf + log_ret,
+						LOG_BUF_SIZE - log_ret, "%5d ",
+						rawdata[i*ROW_SIZE+flat]);
+		}
+		ret += snprintf(buf + ret, PAGE_SIZE - ret, "\n");
+		TOUCH_I("%s\n", log_buf);
+	}
+
+error:
+	if (rawdata != NULL)
+		kfree(rawdata);
+
+	return ret;
+}
+
 static ssize_t show_open_short(struct spi_device *spi, char *buf)
 {
 	struct sic_ts_data *ts =
@@ -2960,7 +3300,6 @@ static ssize_t show_open_short(struct spi_device *spi, char *buf)
 		}
 		ret += snprintf(buf + ret, PAGE_SIZE - ret, "\n");
 	}
-
 	ret += snprintf(buf + ret, PAGE_SIZE - ret,
 		"[Open Short All Test] - %s (%d/%d)\n",
 		(openshort_all_result == 0) ? "Pass" : "Fail",
@@ -3128,16 +3467,25 @@ static ssize_t store_deep_sleep(struct spi_device *spi,
 	}
 
 	mutex_lock(&ts->pdata->thread_lock);
-	if (value == 1) {
-		set_tc_driving(spi, DRIVING_STOP);
-		spi_clock_ctrl(spi, POWER_OFF);
-		spi_osc_power_ctrl(spi, POWER_OFF);
-	} else if (value == 0) {
-		spi_osc_power_ctrl(spi, POWER_ON);
-		spi_clock_ctrl(spi, POWER_ON);
-		set_tc_driving(spi, LCD_MODE_U0);
-	}
+	tci_deep_sleep(spi, value);
 	mutex_unlock(&ts->pdata->thread_lock);
+
+	return count;
+}
+
+static ssize_t store_u3fake(struct spi_device *spi,
+						const char *buf, size_t count)
+{
+	struct sic_ts_data *ts =
+			(struct sic_ts_data *)get_touch_handle(spi);
+	int is_u3fake = 0;
+
+	if (sscanf(buf, "%d", &is_u3fake) <= 0)
+		return count;
+
+	TOUCH_I("%s : is_u3fake = %d\n", __func__, is_u3fake);
+
+	ts->pdata->is_u3fake = is_u3fake;
 
 	return count;
 }
@@ -3336,7 +3684,10 @@ static LGE_TOUCH_ATTR(tci, S_IRUGO | S_IWUSR, show_tci, store_tci);
 static LGE_TOUCH_ATTR(reg_ctrl, S_IRUGO | S_IWUSR, NULL, store_reg_ctrl);
 static LGE_TOUCH_ATTR(object_report, S_IRUGO | S_IWUSR,
 			show_object_report, store_object_report);
-static LGE_TOUCH_ATTR(rawdata, S_IRUGO | S_IWUSR, show_rawdata, store_rawdata);
+static LGE_TOUCH_ATTR(rawdata, S_IRUGO | S_IWUSR,
+	show_rawdata, store_rawdata);
+static LGE_TOUCH_ATTR(baseline, S_IRUGO | S_IWUSR,
+	show_baseline_data, NULL);
 static LGE_TOUCH_ATTR(fdata, S_IRUGO | S_IWUSR, show_fdata, NULL);
 static LGE_TOUCH_ATTR(open_short, S_IRUGO | S_IWUSR, show_open_short, NULL);
 static LGE_TOUCH_ATTR(delta, S_IRUGO | S_IWUSR, show_delta, NULL);
@@ -3357,9 +3708,9 @@ static LGE_TOUCH_ATTR(mfts, S_IRUGO | S_IWUSR,
 static LGE_TOUCH_ATTR(fw_dump, S_IRUSR | S_IWUSR, NULL, store_fw_dump);
 static LGE_TOUCH_ATTR(spi_speed, S_IRUSR | S_IWUSR, show_spi_speed, store_spi_speed);
 static LGE_TOUCH_ATTR(deep_sleep, S_IRUSR | S_IWUSR, NULL, store_deep_sleep);
-
-#if 0
+static LGE_TOUCH_ATTR(u3fake, S_IRUSR | S_IWUSR, NULL, store_u3fake);
 static LGE_TOUCH_ATTR(lpwg_sd, S_IRUGO | S_IWUSR, show_lpwg_sd, NULL);
+#if 0
 static LGE_TOUCH_ATTR(doze1_calibration, S_IRUSR | S_IWUSR,
 		show_doze1_calibration, NULL);
 static LGE_TOUCH_ATTR(doze2_calibration, S_IRUSR | S_IWUSR,
@@ -3382,6 +3733,7 @@ static struct attribute *sic_ts_attribute_list[] = {
 	&lge_touch_attr_testmode_ver.attr,
 	&lge_touch_attr_version.attr,
 	&lge_touch_attr_rawdata.attr,
+	&lge_touch_attr_baseline.attr,
 	&lge_touch_attr_fdata.attr,
 	&lge_touch_attr_delta.attr,
 	&lge_touch_attr_debug_mode.attr,
@@ -3396,8 +3748,9 @@ static struct attribute *sic_ts_attribute_list[] = {
 	&lge_touch_attr_fw_dump.attr,
 	&lge_touch_attr_spi_speed.attr,
 	&lge_touch_attr_deep_sleep.attr,
-#if 0
+	&lge_touch_attr_u3fake.attr,
 	&lge_touch_attr_lpwg_sd.attr,
+#if 0
 	&lge_touch_attr_doze1_calibration.attr,
 	&lge_touch_attr_doze2_calibration.attr,
 #endif
@@ -3456,7 +3809,7 @@ static int compare_fw_version(struct spi_device *spi,
 		return 1;
 	} else if (!ic_ver[0] && !fw_img_ver[0]) {
 		/* ic test, dt test -> 0 and 0*/
-		if (ic_ver[1] != fw_img_ver[1]) {
+		if (ic_ver[1] < fw_img_ver[1]) {
 			TOUCH_D(DEBUG_BASE_INFO | DEBUG_FW_UPGRADE,
 					"fw_version mismatch. Update from Test to Test FW\n");
 			return 1;
@@ -4204,6 +4557,33 @@ error:
 	return -ERROR;
 }
 
+static void charger_state_func(struct work_struct *work_charger)
+{
+	struct sic_ts_data *ts = container_of(to_delayed_work(work_charger),
+			struct sic_ts_data, work_charger);
+
+	u32 charger_state = 0;
+	int ta_status = atomic_read(&ts->state->touch_ta_status);
+
+	TOUCH_TRACE();
+
+	if (ta_status == 0)
+		charger_state = 0x00;
+	else if ((ta_status == 2) || (ta_status == 4))
+		charger_state = 0x02;
+	else
+		charger_state = 0x01;
+
+
+	TOUCH_I("%s: charger_state = %d\n", __func__, charger_state);
+
+	mutex_lock(&ts->pdata->thread_lock);
+	sic_spi_write(ts->spi_device, spr_charger_sts, (u8 *)&charger_state, sizeof(u32));
+	TOUCH_I("%s: write charger_state info at TOUCH IC\n", __func__);
+	mutex_unlock(&ts->pdata->thread_lock);
+
+	return;
+}
 enum error_type sic_ts_probe(struct spi_device *spi,
 	struct touch_platform_data *lge_ts_data,
 	struct state_info *state)
@@ -4252,6 +4632,7 @@ enum error_type sic_ts_probe(struct spi_device *spi,
 #endif
 
 	atomic_set(&ts->lpwg_ctrl.is_suspend, 0);
+	INIT_DELAYED_WORK(&ts->work_charger, charger_state_func);
 	return NO_ERROR;
 error:
 	return ERROR;
@@ -4288,6 +4669,7 @@ enum error_type sic_ts_init(struct spi_device *spi)
 
 	TOUCH_TRACE();
 	TOUCH_D(DEBUG_BASE_INFO, "%s start\n", __func__);
+
 	if (!ts->is_probed) {
 		get_ic_info(ts);
 		ts->fail_overtap = DELAY_TIME;
@@ -4559,23 +4941,16 @@ enum error_type sic_ts_get_data(struct spi_device *spi,
 				error);
 			t_Data = &ts->ts_data.report.touchData[0];
 
-#if 0
 			/* palm touch case */
 			if (t_Data[0].track_id == PALM_ID) {
-				if (t_Data[0].event == TOUCHSTS_DOWN) {
-					TOUCH_I("Palm Detected : [%d]->[%d]\n",
-						ts->is_palm, 1);
-					ts->is_palm = 1;
-				} else if (t_Data[0].event == TOUCHSTS_UP) {
-					TOUCH_I("Palm Released : [%d]->[%d]\n",
-						ts->is_palm, 0);
-					ts->is_palm = 0;
-				}
+				if (t_Data[0].event == TOUCHSTS_DOWN)
+					TOUCH_I("Palm Detected\n");
+				else if (t_Data[0].event == TOUCHSTS_UP)
+					TOUCH_I("Palm Released\n");
 
 				ts_interrupt_clear(ts);
 				return NO_ERROR;
 			}
-#endif
 			/* check if doze_mode is doze1 */
 			if (doze_state != DOZE1_STATUS) {
 				TOUCH_I("Don't report ABS except doze1\n");
@@ -5332,12 +5707,15 @@ error:
 	return ERROR;
 }
 
-enum error_type  sic_ts_notify(struct spi_device *spi,
-								u8 code,
-								u32 value)
+enum error_type  sic_ts_notify(struct spi_device *spi, u8 code, u32 value)
 {
+	struct sic_ts_data *ts
+		= (struct sic_ts_data *)get_touch_handle(spi);
+
 	switch (code) {
 	case NOTIFY_TA_CONNECTION:
+		queue_delayed_work(touch_wq,
+			&ts->work_charger, msecs_to_jiffies(0));
 		break;
 	case NOTIFY_TEMPERATURE_CHANGE:
 		break;
@@ -5611,7 +5989,7 @@ static void async_sic_touch_init(void *data, async_cookie_t cookie)
 
 	TOUCH_D(DEBUG_BASE_INFO, "panel type is %d\n", panel_type);
 
-	if (panel_type != 3)
+	if (panel_type != 4)
 		return;
 
 	TOUCH_D(DEBUG_BASE_INFO, "async_sic_touch_init START!!!!!!\n");
