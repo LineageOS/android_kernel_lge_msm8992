@@ -4621,7 +4621,7 @@ static int touch_probe(struct spi_device *spi)
 	input_set_abs_params(ts->input_dev,
 			ABS_MT_POSITION_X, 0, ts->pdata->caps->max_x, 0, 0);
 	input_set_abs_params(ts->input_dev,
-			ABS_MT_POSITION_Y, 0, ts->pdata->caps->max_y, 0, 0);
+			ABS_MT_POSITION_Y, 160, ts->pdata->caps->max_y, 0, 0);
 	input_set_abs_params(ts->input_dev,
 			ABS_MT_PRESSURE, 0,
 			ts->pdata->caps->max_pressure, 0, 0);
