@@ -2113,6 +2113,61 @@ static bool smbchg_is_aicl_complete(struct smbchg_chip *chip)
 		return true;
 	}
 	return (reg & AICL_STS_BIT) != 0;
+
+	power_supply_set_voltage_limit(chip->usb_psy,
+			(chip->vfloat_mv + 50) * 1000);
+	/* Set USB ICL */
+	target_icl_ma = get_effective_result_locked(chip->usb_icl_votable);
+	new_parallel_cl_ma = total_current_ma
+			* (100 - smbchg_main_chg_icl_percent) / 100;
+	taper_irq_en(chip, true);
+	power_supply_set_present(parallel_psy, true);
+	power_supply_set_current_limit(parallel_psy,
+				new_parallel_cl_ma * 1000);
+	/* read back the real amount of current we are getting */
+	parallel_psy->get_property(parallel_psy,
+			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
+	set_parallel_cl_ma = pval.intval / 1000;
+	chip->parallel.current_max_ma = new_parallel_cl_ma;
+	pr_smb(PR_MISC, "Requested ICL = %d from parallel, got %d\n",
+		new_parallel_cl_ma, set_parallel_cl_ma);
+	new_pmi_cl_ma = max(0, target_icl_ma - set_parallel_cl_ma);
+	pr_smb(PR_STATUS, "New Total USB current = %d[%d, %d]\n",
+		total_current_ma, new_pmi_cl_ma,
+		set_parallel_cl_ma);
+	smbchg_set_usb_current_max(chip, new_pmi_cl_ma);
+
+	/* begin splitting the fast charge current */
+	fcc_ma = get_effective_result_locked(chip->fcc_votable);
+	parallel_chg_fcc_percent =
+		100 - smbchg_main_chg_fcc_percent;
+	target_parallel_fcc_ma =
+		(fcc_ma * parallel_chg_fcc_percent) / 100;
+	pval.intval = target_parallel_fcc_ma * 1000;
+	parallel_psy->set_property(parallel_psy,
+			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
+	/* check how much actual current is supplied by the parallel charger */
+	parallel_psy->get_property(parallel_psy,
+			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
+	supplied_parallel_fcc_ma = pval.intval / 1000;
+	pr_smb(PR_MISC, "Requested FCC = %d from parallel, got %d\n",
+		target_parallel_fcc_ma, supplied_parallel_fcc_ma);
+
+	/* then for the main charger, use the left over FCC */
+	current_table_index = find_smaller_in_array(
+			chip->tables.usb_ilim_ma_table,
+			fcc_ma - supplied_parallel_fcc_ma,
+			chip->tables.usb_ilim_ma_len);
+	main_fastchg_current_ma =
+		chip->tables.usb_ilim_ma_table[current_table_index];
+	smbchg_set_fastchg_current_raw(chip, main_fastchg_current_ma);
+	pr_smb(PR_STATUS, "FCC = %d[%d, %d]\n", fcc_ma, main_fastchg_current_ma,
+					supplied_parallel_fcc_ma);
+
+	chip->parallel.enabled_once = true;
+
+	return;
+>>>>>>> 4e4ce7d5845f... qpnp-smbcharger: Publish charger voltage to the usb psy
 }
 
 static int smbchg_get_aicl_level_ma(struct smbchg_chip *chip)
@@ -2952,8 +3007,11 @@ static int smbchg_float_voltage_set(struct smbchg_chip *chip, int vfloat_mv)
 
 	if (rc)
 		dev_err(chip->dev, "Couldn't set float voltage rc = %d\n", rc);
-	else
+	else {
 		chip->vfloat_mv = vfloat_mv;
+		power_supply_set_voltage_limit(chip->usb_psy,
+				chip->vfloat_mv * 1000);
+	}
 
 	return rc;
 }
