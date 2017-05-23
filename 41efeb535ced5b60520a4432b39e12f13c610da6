@@ -1,0 +1,50 @@
+{
+  "comments": [
+    {
+      "key": {
+        "uuid": "fa82b9bf_45ecfcc7",
+        "filename": "drivers/power/qpnp-smbcharger.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 2115,
+      "author": {
+        "id": 3671
+      },
+      "writtenOn": "2017-05-23T21:57:00Z",
+      "side": 1,
+      "message": "you DO realize none of the following code gets run right?",
+      "range": {
+        "startLine": 2115,
+        "startChar": 1,
+        "endLine": 2115,
+        "endChar": 34
+      },
+      "revId": "41efeb535ced5b60520a4432b39e12f13c610da6",
+      "serverId": "1ec6b3db-b2c1-4fa4-84a2-4c7efe89ba71",
+      "unresolved": false
+    },
+    {
+      "key": {
+        "uuid": "fa82b9bf_25e778e6",
+        "filename": "drivers/power/qpnp-smbcharger.c",
+        "patchSetId": 1
+      },
+      "lineNbr": 2170,
+      "author": {
+        "id": 3671
+      },
+      "writtenOn": "2017-05-23T21:57:00Z",
+      "side": 1,
+      "message": "wat",
+      "range": {
+        "startLine": 2170,
+        "startChar": 0,
+        "endLine": 2170,
+        "endChar": 7
+      },
+      "revId": "41efeb535ced5b60520a4432b39e12f13c610da6",
+      "serverId": "1ec6b3db-b2c1-4fa4-84a2-4c7efe89ba71",
+      "unresolved": false
+    }
+  ]
+}
