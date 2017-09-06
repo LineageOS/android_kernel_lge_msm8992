@@ -196,6 +196,10 @@ extern int gpio_request_one(unsigned gpio, unsigned long flags, const char *labe
 extern int gpio_request_array(const struct gpio *array, size_t num);
 extern void gpio_free_array(const struct gpio *array, size_t num);
 
+#ifdef CONFIG_LGE_PM_IDTP9017_WIRELESS_CHARGER
+extern int check_gpio_status(unsigned gpio);
+#endif
+
 #ifdef CONFIG_GPIO_SYSFS
 
 /*

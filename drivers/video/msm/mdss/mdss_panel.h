@@ -19,6 +19,10 @@
 #include <linux/types.h>
 #include <linux/debugfs.h>
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+#include "lge/panel/oem_mdss_panel_info.h"
+#endif
+
 /* panel id type */
 struct panel_id {
 	u16 id;
@@ -457,7 +461,6 @@ struct mdss_panel_info {
 	u32 min_height;
 	u32 min_fps;
 	u32 max_fps;
-
 	u32 cont_splash_enabled;
 	bool esd_rdy;
 	bool partial_update_supported; /* value from dts if pu is supported */
@@ -491,6 +494,9 @@ struct mdss_panel_info {
 
 	/* debugfs structure for the panel */
 	struct mdss_panel_debugfs_info *debugfs_info;
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	struct lge_pan_info lge_pan_info;
+#endif
 };
 
 struct mdss_panel_timing {

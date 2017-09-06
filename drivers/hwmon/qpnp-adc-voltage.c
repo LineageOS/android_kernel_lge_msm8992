@@ -176,6 +176,9 @@ static struct qpnp_vadc_scale_fn vadc_scale_fn[] = {
 	[SCALE_QRD_SKUT1_BATT_THERM] = {qpnp_adc_scale_qrd_skut1_batt_therm},
 	[SCALE_QRD_SKUC_BATT_THERM] = {qpnp_adc_scale_qrd_skuc_batt_therm},
 	[SCALE_QRD_SKUE_BATT_THERM] = {qpnp_adc_scale_qrd_skue_batt_therm},
+#ifdef CONFIG_LGE_PM_BOARD_THERM
+	[SCALE_BOARD_THERM] = {qpnp_adc_scale_board_therm},
+#endif
 };
 
 static struct qpnp_vadc_rscale_fn adc_vadc_rscale_fn[] = {

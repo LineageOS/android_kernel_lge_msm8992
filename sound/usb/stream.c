@@ -647,6 +647,8 @@ int snd_usb_parse_audio_interface(struct snd_usb_audio *chip, int iface_no)
 		INIT_LIST_HEAD(&fp->list);
 		fp->chmap = convert_chmap(num_channels, chconfig, protocol);
 
+		INIT_LIST_HEAD(&fp->list);
+
 		/* some quirks for attributes here */
 
 		switch (chip->usb_id) {

@@ -2131,6 +2131,11 @@ void usb_disconnect(struct usb_device **pdev)
 		if (hub && hub->ports[i]->child)
 			usb_disconnect(&hub->ports[i]->child);
 	}
+#if defined(CONFIG_LGE_TOUCH_CORE)
+	if (udev->bus->busnum == 1 && udev->devnum == 1)
+		touch_notify_connect(0);
+#endif
+
 
 	/* deallocate hcd/hardware state ... nuking all pending urbs and
 	 * cleaning up all state associated with the current configuration
@@ -2519,6 +2524,10 @@ int usb_new_device(struct usb_device *udev)
 	(void) usb_create_ep_devs(&udev->dev, &udev->ep0, udev);
 	usb_mark_last_busy(udev);
 	pm_runtime_put_sync_autosuspend(&udev->dev);
+#if defined(CONFIG_LGE_TOUCH_CORE)
+	if (udev->bus->busnum == 1 && udev->devnum == 1)
+		touch_notify_connect(6);
+#endif
 	return err;
 
 fail:

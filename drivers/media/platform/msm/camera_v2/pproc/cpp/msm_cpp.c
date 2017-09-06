@@ -164,7 +164,13 @@ static struct msm_bus_scale_pdata msm_cpp_bus_scale_data = {
 	qcmd;			 \
 })
 
+/*LGE_CHANGE S, change the trial count from 0 to 3, 2015-07-22, freeso.kim@lge.com*/
+#if 0 //qct original
 #define MSM_CPP_MAX_TIMEOUT_TRIAL 0
+#else
+#define MSM_CPP_MAX_TIMEOUT_TRIAL 3
+#endif
+/*LGE_CHANGE E, change the trial count from 0 to 3, 2015-07-22, freeso.kim@lge.com*/
 
 struct msm_cpp_timer_data_t {
 	struct cpp_device *cpp_dev;
@@ -314,8 +320,8 @@ static void cpp_timer_callback(unsigned long data);
 
 uint8_t induce_error;
 static int msm_cpp_enable_debugfs(struct cpp_device *cpp_dev);
-
-static void msm_cpp_write(u32 data, void __iomem *cpp_base)
+/* LGE_CHANGE, camera stability task, Changed to inline function for RTB logging */
+static inline void msm_cpp_write(u32 data, void __iomem *cpp_base)
 {
 	writel_relaxed((data), cpp_base + MSM_CPP_MICRO_FIFO_RX_DATA);
 }
@@ -1882,7 +1888,7 @@ static int msm_cpp_cfg_frame(struct cpp_device *cpp_dev,
 	struct msm_buf_mngr_info buff_mgr_info, dup_buff_mgr_info;
 	int32_t in_fd;
 	int32_t i = 0, num_output_bufs = 1;
-	int32_t stripe_base = 0;
+	uint32_t stripe_base = 0;
 	uint32_t rd_pntr, wr_0_pntr, wr_1_pntr, wr_2_pntr, wr_3_pntr;
 	uint32_t wr_0_meta_data_wr_pntr, wr_1_meta_data_wr_pntr,
 		wr_2_meta_data_wr_pntr, wr_3_meta_data_wr_pntr;
@@ -1917,6 +1923,13 @@ static int msm_cpp_cfg_frame(struct cpp_device *cpp_dev,
 		pr_err("Length is not correct or frame message is missing\n");
 		return -EINVAL;
 	}
+
+    if (stripe_base == UINT_MAX || new_frame->num_strips >
+        (UINT_MAX - 1 - stripe_base) / stripe_size) {
+        pr_err("Invalid frame message,num_strips %d is large\n",
+            new_frame->num_strips);
+        return -EINVAL;
+    }
 
 	if (cpp_frame_msg[new_frame->msg_len - 1] !=
 		MSM_CPP_MSG_ID_TRAILER) {
@@ -2486,8 +2499,7 @@ STREAM_BUFF_END:
 		uint32_t identity;
 		struct msm_cpp_buff_queue_info_t *buff_queue_info;
 		CPP_DBG("VIDIOC_MSM_CPP_DEQUEUE_STREAM_BUFF_INFO\n");
-		if ((ioctl_ptr->len == 0) ||
-		    (ioctl_ptr->len > sizeof(uint32_t))) {
+		if (ioctl_ptr->len != sizeof(uint32_t)) {
 			mutex_unlock(&cpp_dev->mutex);
 			return -EINVAL;
 		}

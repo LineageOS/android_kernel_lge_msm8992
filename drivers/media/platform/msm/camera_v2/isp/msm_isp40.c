@@ -1976,14 +1976,14 @@ static void msm_vfe40_stats_enable_module(struct vfe_device *vfe_dev,
 	 * For vfe40 stats and other modules share module_cfg register.
 	 * Hence need to Grab lock.
 	 */
-	spin_lock_irqsave(&vfe_dev->shared_data_lock, flags);
+	spin_lock_irqsave(&vfe_dev->shared_cfg_reg_lock, flags);  //LGE_CHANGE, 20150609, Change spin_lock for watchodog case using shard_data_lock, changhwan.kang.kang
 	module_cfg = msm_camera_io_r(vfe_dev->vfe_base + 0x18);
 	if (enable)
 		module_cfg |= module_cfg_mask;
 	else
 		module_cfg &= ~module_cfg_mask;
 	msm_camera_io_w(module_cfg, vfe_dev->vfe_base + 0x18);
-	spin_unlock_irqrestore(&vfe_dev->shared_data_lock, flags);
+	spin_unlock_irqrestore(&vfe_dev->shared_cfg_reg_lock, flags);  //LGE_CHANGE, 20150609, Change spin_lock for watchodog case using shard_data_lock, changhwan.kang.kang
 }
 
 static void msm_vfe40_stats_update_ping_pong_addr(

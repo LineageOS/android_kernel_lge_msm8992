@@ -1214,7 +1214,8 @@ int udp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	unsigned int ulen, copied;
 	int peeked, off = 0;
 	int err;
-	int is_udplite = IS_UDPLITE(sk);
+	int is_udplite = IS_UDPLITE(sk);	
+	bool checksum_valid = false;
 	bool slow;
 
 	if (flags & MSG_ERRQUEUE)
@@ -1240,11 +1241,12 @@ try_again:
 	 */
 
 	if (copied < ulen || UDP_SKB_CB(skb)->partial_cov) {
-		if (udp_lib_checksum_complete(skb))
+  checksum_valid = !udp_lib_checksum_complete(skb);
+  if (!checksum_valid)
 			goto csum_copy_err;
 	}
 
-	if (skb_csum_unnecessary(skb))
+ if (checksum_valid || skb_csum_unnecessary(skb))
 		err = skb_copy_datagram_iovec(skb, sizeof(struct udphdr),
 					      msg->msg_iov, copied);
 	else {
@@ -1638,7 +1640,9 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 static inline int udp4_csum_init(struct sk_buff *skb, struct udphdr *uh,
 				 int proto)
 {
+#ifndef CONFIG_LGP_DATA_TCPIP_MPTCP
 	const struct iphdr *iph;
+#endif
 	int err;
 
 	UDP_SKB_CB(skb)->partial_cov = 0;
@@ -1650,6 +1654,10 @@ static inline int udp4_csum_init(struct sk_buff *skb, struct udphdr *uh,
 			return err;
 	}
 
+#ifdef CONFIG_LGP_DATA_TCPIP_MPTCP
+	return skb_checksum_init_zero_check(skb, proto, uh->check,
+					    inet_compute_pseudo);
+#else
 	iph = ip_hdr(skb);
 	if (uh->check == 0) {
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
@@ -1666,6 +1674,7 @@ static inline int udp4_csum_init(struct sk_buff *skb, struct udphdr *uh,
 	 */
 
 	return 0;
+#endif
 }
 
 /*

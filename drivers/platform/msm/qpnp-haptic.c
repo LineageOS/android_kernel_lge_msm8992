@@ -24,6 +24,7 @@
 #include <linux/delay.h>
 #include <linux/qpnp/qpnp-haptic.h>
 #include "../../staging/android/timed_output.h"
+#include <linux/printk.h>
 
 #define QPNP_IRQ_FLAGS	(IRQF_TRIGGER_RISING | \
 			IRQF_TRIGGER_FALLING | \
@@ -70,7 +71,9 @@
 #define QPNP_HAP_VMAX_MASK		0xC1
 #define QPNP_HAP_VMAX_SHIFT		1
 #define QPNP_HAP_VMAX_MIN_MV		116
-#define QPNP_HAP_VMAX_MAX_MV		3596
+/* QCT original */
+//#define QPNP_HAP_VMAX_MAX_MV		3596
+#define QPNP_HAP_VMAX_MAX_MV		2088
 #define QPNP_HAP_ILIM_MASK		0xFE
 #define QPNP_HAP_ILIM_MIN_MV		400
 #define QPNP_HAP_ILIM_MAX_MV		800
@@ -135,6 +138,8 @@
 #define QPNP_HAP_CYCLS			5
 #define QPNP_TEST_TIMER_MS		5
 
+/* LGE Add DIRECT MODE Over Drive , Reverse Brake voltage */
+#define QPNP_HAP_OV_RB_MV 3016
 #define AUTO_RES_ENABLE_TIMEOUT		20000
 #define AUTO_RES_ERR_CAPTURE_RES	5
 #define AUTO_RES_ERR_MAX		15
@@ -291,6 +296,7 @@ struct qpnp_hap {
 	enum qpnp_hap_high_z lra_high_z;
 	u32 timeout_ms;
 	u32 vmax_mv;
+	u32 vmax_mv_orig;
 	u32 ilim_ma;
 	u32 sc_deb_cycles;
 	u32 int_pwm_freq_khz;
@@ -321,6 +327,9 @@ struct qpnp_hap {
 	bool correct_lra_drive_freq;
 	bool misc_trim_error_rc19p2_clk_reg_present;
 };
+
+/* LGE add qpnp_hap_vmax_config function for Overdrive and reverse braking in Direct MODE */
+static int qpnp_hap_vmax_config(struct qpnp_hap *hap ,int odrb );
 
 static struct qpnp_hap *ghap;
 
@@ -423,12 +432,25 @@ static int qpnp_hap_play(struct qpnp_hap *hap, int on)
 		val |= QPNP_HAP_PLAY_EN;
 	else
 		val &= ~QPNP_HAP_PLAY_EN;
+	if (hap->play_mode == QPNP_HAP_DIRECT) {
+		if (!on) {
+
+			/* LGE don't use 2 x VMAX */
+#if 0
+			/* 2 x VMAX reverse braking */
+			hap->vmax_mv = hap->vmax_mv_orig * 2;
+#endif
+			/* LGE set Reverse braking tunning voltage */
+			hap->vmax_mv = QPNP_HAP_OV_RB_MV;
+			qpnp_hap_vmax_config(hap,1);
+		}
+	}
 
 	rc = qpnp_hap_write_reg(hap, &val,
 			QPNP_HAP_PLAY_REG(hap->base));
 	if (rc < 0)
 		return rc;
-
+	pr_info("[LGE VIBRATOR] qpnp_hap_play play : %d voltage : %d \n", on  , hap->vmax_mv);
 	hap->reg_play = val;
 
 	return 0;
@@ -648,7 +670,7 @@ static int qpnp_hap_play_mode_config(struct qpnp_hap *hap)
 }
 
 /* configuration api for max volatge */
-static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
+static int qpnp_hap_vmax_config(struct qpnp_hap *hap , int odrb)
 {
 	u8 reg = 0;
 	int rc, temp;
@@ -656,7 +678,14 @@ static int qpnp_hap_vmax_config(struct qpnp_hap *hap)
 	if (hap->vmax_mv < QPNP_HAP_VMAX_MIN_MV)
 		hap->vmax_mv = QPNP_HAP_VMAX_MIN_MV;
 	else if (hap->vmax_mv > QPNP_HAP_VMAX_MAX_MV)
+	{
+	/* LGE add QPNP_HAP_OV_RB_MV */
+	/* When Over drive or Reverse braking occur , odrb = 1 */
+	 if(odrb)
+		hap->vmax_mv = QPNP_HAP_OV_RB_MV;
+	 else
 		hap->vmax_mv = QPNP_HAP_VMAX_MAX_MV;
+	}
 
 	rc = qpnp_hap_read_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
 	if (rc < 0)
@@ -1247,6 +1276,74 @@ static ssize_t qpnp_hap_ramp_test_data_show(struct device *dev,
 
 }
 
+/* sysfs show for amp */
+static ssize_t qpnp_hap_amp_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	u8 reg = 0, temp = 0;
+	int res, ret;
+
+	ret = qpnp_hap_read_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
+	if (ret < 0) {
+			dev_err(&hap->spmi->dev,
+					"Error reading address: %X\n",
+					QPNP_HAP_VMAX_REG(hap->base));
+	    return ret;
+	}
+
+	reg &= ~QPNP_HAP_VMAX_MASK;
+	temp = reg >> QPNP_HAP_VMAX_SHIFT;
+	res = temp * QPNP_HAP_VMAX_MIN_MV;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", res);
+}
+
+/* sysfs store for amp */
+static ssize_t qpnp_hap_amp_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct timed_output_dev *timed_dev = dev_get_drvdata(dev);
+	struct qpnp_hap *hap = container_of(timed_dev, struct qpnp_hap,
+					 timed_dev);
+	u8 reg = 0;
+	int temp, ret, value;
+
+	if (sscanf(buf, "%d", &value) != 1)
+		return -EINVAL;
+
+	if (value < QPNP_HAP_VMAX_MIN_MV)
+		value = QPNP_HAP_VMAX_MIN_MV;
+	else if (value > QPNP_HAP_VMAX_MAX_MV)
+		value = QPNP_HAP_VMAX_MAX_MV;
+
+	ret = qpnp_hap_read_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
+
+	if (ret < 0) {
+			dev_err(&hap->spmi->dev, "Error reading address: %X\n",
+					QPNP_HAP_VMAX_REG(hap->base));
+	}
+
+	reg &= QPNP_HAP_VMAX_MASK;
+	/* Vmax Controlled by 116mV step. So we divide our input Voltage by 116 */
+	temp = value / QPNP_HAP_VMAX_MIN_MV;
+	/* Changed Vmax have to save to hap->vmax_mv and hap->vmax_mv_orig to
+						recover vmax that changed here */
+	hap->vmax_mv = hap->vmax_mv_orig = temp * QPNP_HAP_VMAX_MIN_MV;
+	reg |= (temp << QPNP_HAP_VMAX_SHIFT);
+
+	ret = qpnp_hap_write_reg(hap, &reg, QPNP_HAP_VMAX_REG(hap->base));
+	if (ret < 0) {
+			dev_err(&hap->spmi->dev,
+					"Error writing address: %X\n",
+					QPNP_HAP_VMAX_REG(hap->base));
+	}
+
+	return count;
+}
+
 /* sysfs attributes */
 static struct device_attribute qpnp_hap_attrs[] = {
 	__ATTR(wf_s0, (S_IRUGO | S_IWUSR | S_IWGRP),
@@ -1294,6 +1391,9 @@ static struct device_attribute qpnp_hap_attrs[] = {
 	__ATTR(min_max_test, (S_IRUGO | S_IWUSR | S_IWGRP),
 			qpnp_hap_min_max_test_data_show,
 			qpnp_hap_min_max_test_data_store),
+	__ATTR(amp, (S_IRUGO | S_IWUSR | S_IWGRP),
+			qpnp_hap_amp_show,
+			qpnp_hap_amp_store),
 };
 
 static void calculate_lra_code(struct qpnp_hap *hap)
@@ -1502,6 +1602,7 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 {
 	struct qpnp_hap *hap = container_of(dev, struct qpnp_hap,
 					 timed_dev);
+	pr_debug("[LGE VIBRATOR] qpnp_hap_td_enable timeout_ms : %d , voltage : %d\n", value , hap->vmax_mv);
 
 	mutex_lock(&hap->lock);
 	hrtimer_cancel(&hap->hap_timer);
@@ -1521,6 +1622,7 @@ static void qpnp_hap_td_enable(struct timed_output_dev *dev, int value)
 			      HRTIMER_MODE_REL);
 	}
 	mutex_unlock(&hap->lock);
+
 	schedule_work(&hap->work);
 }
 
@@ -1586,6 +1688,39 @@ static void qpnp_hap_worker(struct work_struct *work)
 {
 	struct qpnp_hap *hap = container_of(work, struct qpnp_hap,
 					 work);
+	u8 reg = 0;
+	int rc;
+
+	if (hap->play_mode == QPNP_HAP_DIRECT) {
+		if (hap->state) {
+			/* haptic on */
+
+			rc = qpnp_hap_read_reg(hap, &reg,
+						QPNP_HAP_STATUS(hap->base));
+			if (rc < 0)
+				return;
+
+			if ((reg & QPNP_HAP_STATUS_BUSY) == 0) {
+				/* LGE don't use 2 x VMAX */
+#if 0
+				/* Over Drive : 2 vmax */
+				hap->vmax_mv = hap->vmax_mv_orig * 2;
+#endif
+				/* LGE set Over Drive tunning voltage */
+				hap->vmax_mv =QPNP_HAP_OV_RB_MV;
+
+				qpnp_hap_vmax_config(hap ,1);
+
+				qpnp_hap_set(hap, 1);
+				/* LGE add Over Drive time rate*/
+				usleep(2*hap->wave_play_rate_us);
+
+				/* recover original vmax */
+				hap->vmax_mv = hap->vmax_mv_orig;
+				qpnp_hap_vmax_config(hap ,0 );
+			}
+		}
+	}
 
 	if (hap->play_mode == QPNP_HAP_PWM)
 		qpnp_hap_mod_enable(hap, hap->state);
@@ -1700,7 +1835,7 @@ static int qpnp_hap_config(struct qpnp_hap *hap)
 		return rc;
 
 	/* Configure the VMAX register */
-	rc = qpnp_hap_vmax_config(hap);
+	rc = qpnp_hap_vmax_config(hap , 0);
 	if (rc)
 		return rc;
 
@@ -1997,6 +2132,7 @@ static int qpnp_hap_parse_dt(struct qpnp_hap *hap)
 			"qcom,vmax-mv", &temp);
 	if (!rc) {
 		hap->vmax_mv = temp;
+		hap->vmax_mv_orig = hap->vmax_mv;
 	} else if (rc != -EINVAL) {
 		dev_err(&spmi->dev, "Unable to read vmax\n");
 		return rc;

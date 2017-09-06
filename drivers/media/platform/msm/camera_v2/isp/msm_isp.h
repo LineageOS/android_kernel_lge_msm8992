@@ -418,6 +418,7 @@ struct msm_vfe_axi_shared_data {
 	struct msm_vfe_src_info src_info[VFE_SRC_MAX];
 	uint16_t stream_handle_cnt;
 	uint32_t event_mask;
+	uint8_t enable_frameid_recovery; /*QCT_PATCH, disable the vfe recovery when frame_id mismatch, 2015-07-14, freeso.kim@lge.com*/
 };
 
 struct msm_vfe_stats_hardware_info {
@@ -611,6 +612,7 @@ struct vfe_device {
 	spinlock_t tasklet_lock;
 	spinlock_t shared_data_lock;
 	spinlock_t reg_update_lock;
+        spinlock_t  shared_cfg_reg_lock;  //LGE_CHANGE, 20150609, Change spin_lock for watchodog case using shard_data_lock, changhwan.kang.kang
 	struct list_head tasklet_q;
 	struct tasklet_struct vfe_tasklet;
 	struct msm_vfe_tasklet_queue_cmd

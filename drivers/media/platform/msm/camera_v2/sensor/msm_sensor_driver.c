@@ -145,6 +145,83 @@ static int32_t msm_sensor_driver_create_v4l_subdev
 	return rc;
 }
 
+#if 0//defined(CONFIG_MSM_OTP)
+static int32_t msm_sensor_fill_otp_subdevid_by_name(
+				struct msm_sensor_ctrl_t *s_ctrl)
+{
+	int32_t rc = 0;
+	const char *otp_name;
+	struct device_node *src_node = NULL;
+	uint32_t val = 0, count = 0, otp_name_len;
+	int i;
+	int32_t *otp_subdev_id;
+	struct  msm_sensor_info_t *sensor_info;
+	struct device_node *of_node = s_ctrl->of_node;
+	const void *p;
+
+	if (!s_ctrl->sensordata->otp_name || !of_node)
+		return -EINVAL;
+
+	otp_name_len = strlen(s_ctrl->sensordata->otp_name);
+	if (otp_name_len >= MAX_SENSOR_NAME)
+		return -EINVAL;
+
+	sensor_info = s_ctrl->sensordata->sensor_info;
+	otp_subdev_id = &sensor_info->subdev_id[SUB_MODULE_OTP];
+	/*
+	 * string for otp name is valid, set sudev id to -1
+	 *  and try to found new id
+	 */
+	*otp_subdev_id = -1;
+
+	if (0 == otp_name_len)
+		return 0;
+
+	CDBG("Try to find otp subdev for %s\n",
+			s_ctrl->sensordata->otp_name);
+	p = of_get_property(of_node, "qcom,otp-src", &count);
+	if (!p || !count)
+		return 0;
+
+	count /= sizeof(uint32_t);
+	for (i = 0; i < count; i++) {
+		otp_name = NULL;
+		src_node = of_parse_phandle(of_node, "qcom,otp-src", i);
+		if (!src_node) {
+			pr_err("otp src node NULL\n");
+			continue;
+		}
+		rc = of_property_read_string(src_node, "qcom,otp-name",
+			&otp_name);
+		if (rc < 0) {
+			pr_err("failed\n");
+			of_node_put(src_node);
+			continue;
+		}
+		if (strcmp(otp_name, s_ctrl->sensordata->otp_name))
+			continue;
+
+		rc = of_property_read_u32(src_node, "cell-index", &val);
+
+		CDBG("%s qcom,otp cell index %d, rc %d\n", __func__,
+			val, rc);
+		if (rc < 0) {
+			pr_err("failed\n");
+			of_node_put(src_node);
+			continue;
+		}
+
+		*otp_subdev_id = val;
+		CDBG("Done. otp subdevice id is %d\n", val);
+		of_node_put(src_node);
+		src_node = NULL;
+		break;
+	}
+
+	return rc;
+}
+#endif
+
 static int32_t msm_sensor_fill_eeprom_subdevid_by_name(
 				struct msm_sensor_ctrl_t *s_ctrl)
 {
@@ -307,6 +384,86 @@ static int32_t msm_sensor_fill_ois_subdevid_by_name(
 			return -EINVAL;
 		}
 		*ois_subdev_id = val;
+		of_node_put(src_node);
+		src_node = NULL;
+	}
+
+	return rc;
+}
+
+static int32_t msm_sensor_fill_proxy_subdevid_by_name(
+				struct msm_sensor_ctrl_t *s_ctrl)
+{
+	int32_t rc = 0;
+	struct device_node *src_node = NULL;
+	uint32_t val = 0;
+	int32_t *ois_subdev_id;
+	struct  msm_sensor_info_t *sensor_info;
+	struct device_node *of_node = s_ctrl->of_node;
+
+	if (!of_node)
+		return -EINVAL;
+
+	sensor_info = s_ctrl->sensordata->sensor_info;
+	ois_subdev_id = &sensor_info->subdev_id[SUB_MODULE_PROXY];
+	/*
+	 * string for ois name is valid, set sudev id to -1
+	 * and try to found new id
+	 */
+	*ois_subdev_id = -1;
+
+	src_node = of_parse_phandle(of_node, "qcom,proxy-src", 0);
+	if (!src_node) {
+		CDBG("%s:%d src_node NULL\n", __func__, __LINE__);
+	} else {
+		rc = of_property_read_u32(src_node, "cell-index", &val);
+		CDBG("%s qcom,proxy cell index %d, rc %d\n", __func__,
+			val, rc);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			return -EINVAL;
+		}
+		*ois_subdev_id = val;
+		of_node_put(src_node);
+		src_node = NULL;
+	}
+
+	return rc;
+}
+
+static int32_t msm_sensor_fill_tcs_subdevid_by_name(
+				struct msm_sensor_ctrl_t *s_ctrl)
+{
+	int32_t rc = 0;
+	struct device_node *src_node = NULL;
+	uint32_t val = 0;
+	int32_t *tcs_subdev_id;
+	struct  msm_sensor_info_t *sensor_info;
+	struct device_node *of_node = s_ctrl->of_node;
+
+	if (!of_node)
+		return -EINVAL;
+
+	sensor_info = s_ctrl->sensordata->sensor_info;
+	tcs_subdev_id = &sensor_info->subdev_id[SUB_MODULE_TCS];
+	/*
+	 * string for ois name is valid, set sudev id to -1
+	 * and try to found new id
+	 */
+	*tcs_subdev_id = -1;
+
+	src_node = of_parse_phandle(of_node, "qcom,tcs-src", 0);
+	if (!src_node) {
+		CDBG("%s:%d src_node NULL\n", __func__, __LINE__);
+	} else {
+		rc = of_property_read_u32(src_node, "cell-index", &val);
+		CDBG("%s qcom,tcs cell index %d, rc %d\n", __func__,
+			val, rc);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			return -EINVAL;
+		}
+		*tcs_subdev_id = val;
 		of_node_put(src_node);
 		src_node = NULL;
 	}
@@ -857,6 +1014,10 @@ int32_t msm_sensor_driver_probe(void *setting,
 	s_ctrl->sensordata->eeprom_name = slave_info->eeprom_name;
 	s_ctrl->sensordata->actuator_name = slave_info->actuator_name;
 	s_ctrl->sensordata->ois_name = slave_info->ois_name;
+#if 0//defined(CONFIG_MSM_OTP)
+	s_ctrl->sensordata->otp_name = slave_info->otp_name;
+#endif
+
 	/*
 	 * Update eeporm subdevice Id by input eeprom name
 	 */
@@ -865,6 +1026,18 @@ int32_t msm_sensor_driver_probe(void *setting,
 		pr_err("%s failed %d\n", __func__, __LINE__);
 		goto free_camera_info;
 	}
+
+#if 0//defined(CONFIG_MSM_OTP)
+	/*
+	 * Update eeporm subdevice Id by input eeprom name
+	 */
+	rc = msm_sensor_fill_otp_subdevid_by_name(s_ctrl);
+	if (rc < 0) {
+		pr_err("%s failed %d\n", __func__, __LINE__);
+		goto free_camera_info;
+	}
+#endif
+
 	/*
 	 * Update actuator subdevice Id by input actuator name
 	 */
@@ -879,6 +1052,18 @@ int32_t msm_sensor_driver_probe(void *setting,
 		pr_err("%s failed %d\n", __func__, __LINE__);
 		goto free_camera_info;
 	}
+
+	rc = msm_sensor_fill_proxy_subdevid_by_name(s_ctrl);
+	if (rc < 0) {
+		pr_err("%s failed %d\n", __func__, __LINE__);
+		goto free_camera_info;
+	}
+
+	rc = msm_sensor_fill_tcs_subdevid_by_name(s_ctrl);
+		if (rc < 0) {
+			pr_err("%s failed %d\n", __func__, __LINE__);
+			goto free_camera_info;
+		}
 
 	/* Power up and probe sensor */
 	rc = s_ctrl->func_tbl->sensor_power_up(s_ctrl);

@@ -29,7 +29,21 @@
 #include "mdss_dsi.h"
 #include "mdss_debug.h"
 
+#include <soc/qcom/lge/board_lge.h>
 #define XO_CLK_RATE	19200000
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+#include "lge/panel/oem_mdss_dsi_common.h"
+struct lge_mdss_dsi_interface lge_mdss_dsi;
+#endif
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+extern int lge_lg4945_panel_mode_cmd_send(int mode, struct mdss_dsi_ctrl_pdata *ctrl);
+#endif
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+extern int lgd_qhd_command_dsi_panel_set_voltage(struct device_node *supply_node,
+		struct dss_vreg *vreg_config, char *cmd_key, int num_of_rev);
+#endif
 
 static struct dsi_drv_cm_data shared_ctrl_data;
 
@@ -153,7 +167,9 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 {
 	int ret = 0;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+#if !IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
 	int i = 0;
+#endif
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -181,7 +197,10 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 		/* Add delay recommended by panel specs */
 		udelay(2000);
 	}
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_msm_dss_enable_vreg)
+		ret = lge_mdss_dsi.lge_msm_dss_enable_vreg(ctrl_pdata, 0);
+#else
 	for (i = DSI_MAX_PM - 1; i >= 0; i--) {
 		/*
 		 * Core power module will be disabled when the
@@ -196,6 +215,7 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 			pr_err("%s: failed to disable vregs for %s\n",
 				__func__, __mdss_dsi_pm_name(i));
 	}
+#endif
 
 end:
 	return ret;
@@ -212,9 +232,19 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+	pr_debug("%s + \n", __func__);
+
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_msm_dss_enable_vreg)
+		ret = lge_mdss_dsi.lge_msm_dss_enable_vreg(ctrl_pdata, 1);
+	i = DSI_MAX_PM;
+	if(ret){
+		i--;
+		goto error;
+	}
+#else
 	for (i = 0; i < DSI_MAX_PM; i++) {
 		/*
 		 * Core power module will be enabled when the
@@ -231,6 +261,7 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 			goto error;
 		}
 	}
+#endif
 	if (ctrl_pdata->panel_bias_vreg) {
 		pr_debug("%s: Enable panel bias vreg. ndx = %d\n",
 		       __func__, ctrl_pdata->ndx);
@@ -272,6 +303,7 @@ error:
 static int mdss_dsi_panel_power_lp(struct mdss_panel_data *pdata, int enable)
 {
 	/* Panel power control when entering/exiting lp mode */
+	pr_debug("%s, do nothing\n", __func__);
 	return 0;
 }
 
@@ -287,7 +319,7 @@ static int mdss_dsi_panel_power_ctrl(struct mdss_panel_data *pdata,
 	}
 
 	pinfo = &pdata->panel_info;
-	pr_debug("%s: cur_power_state=%d req_power_state=%d\n", __func__,
+	pr_info("%s: cur_power_state=%d req_power_state=%d\n", __func__,
 		pinfo->panel_power_state, power_state);
 
 	if (pinfo->panel_power_state == power_state) {
@@ -351,6 +383,9 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 	struct device_node *of_node = NULL, *supply_node = NULL;
 	const char *pm_supply_name = NULL;
 	struct device_node *supply_root_node = NULL;
+#if defined(CONFIG_MACH_MSM8992_P1_GLOBAL_COM) || defined(CONFIG_MACH_MSM8992_SJR_GLOBAL_COM)
+	char *global_dual_tpio = "tpio";
+#endif
 
 	if (!dev || !mp) {
 		pr_err("%s: invalid input\n", __func__);
@@ -397,6 +432,15 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 				__func__, rc);
 			goto error;
 		}
+#if defined(CONFIG_MACH_MSM8992_P1_GLOBAL_COM) || defined(CONFIG_MACH_MSM8992_SJR_GLOBAL_COM)
+		if (lge_get_sim_type() == 2) {//Dual Sim
+			if (!strcmp(st,global_dual_tpio)) {
+				pr_info("%s: Global dual sim doesn't register tpio ldo power\n", __func__);
+				mp->num_vreg--;
+				continue;
+			}
+		}
+#endif
 		snprintf(mp->vreg_config[i].vreg_name,
 			ARRAY_SIZE((mp->vreg_config[i].vreg_name)), "%s", st);
 		/* vreg-min-voltage */
@@ -418,6 +462,18 @@ static int mdss_dsi_get_dt_vreg_data(struct device *dev,
 			goto error;
 		}
 		mp->vreg_config[i].max_voltage = tmp;
+
+#if IS_ENABLED(CONFIG_LGE_MIPI_PP_INCELL_QHD_CMD_PANEL)
+		rc = of_property_read_u32(supply_node,
+			"qcom,supply-num-of-rev", &tmp);
+
+		tmp = !rc ? tmp : 0;
+
+		if (tmp) {
+			lgd_qhd_command_dsi_panel_set_voltage(supply_node,
+					&mp->vreg_config[i], "qcom,supply-rev-voltage", tmp);
+		}
+#endif
 
 		/* enable-load */
 		rc = of_property_read_u32(supply_node,
@@ -568,6 +624,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 	if (pdata->panel_info.type == MIPI_CMD_PANEL)
 		mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 1);
 
+	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_LINK_CLKS, 0);
 	if (!pdata->panel_info.ulps_suspend_enabled) {
 		/* disable DSI controller */
 		mdss_dsi_controller_cfg(0, pdata);
@@ -576,7 +633,7 @@ static int mdss_dsi_off(struct mdss_panel_data *pdata, int power_state)
 		mdss_dsi_phy_disable(ctrl_pdata);
 	}
 
-	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
+	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_BUS_CLKS, 0);
 
 panel_power_ctrl:
 	ret = mdss_dsi_panel_power_ctrl(pdata, power_state);
@@ -592,7 +649,7 @@ panel_power_ctrl:
 
 end:
 	mutex_unlock(&ctrl_pdata->mutex);
-	pr_debug("%s-:\n", __func__);
+	pr_info("%s-:\n", __func__);
 
 	return ret;
 }
@@ -728,6 +785,10 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		goto end;
 	}
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.pre_mdss_dsi_panel_power_ctrl)
+		ret = lge_mdss_dsi.pre_mdss_dsi_panel_power_ctrl(pdata, 1);
+#endif
 	ret = mdss_dsi_panel_power_ctrl(pdata, MDSS_PANEL_POWER_ON);
 	if (ret) {
 		pr_err("%s:Panel power on failed. rc=%d\n", __func__, ret);
@@ -772,6 +833,10 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		if (mdss_dsi_pinctrl_set_state(ctrl_pdata, true))
 			pr_debug("reset enable: pinctrl not enabled\n");
 		mdss_dsi_panel_reset(pdata, 1);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+		if (lge_mdss_dsi.post_mdss_dsi_panel_power_ctrl)
+			ret = lge_mdss_dsi.post_mdss_dsi_panel_power_ctrl(pdata, 1);
+#endif
 	}
 
 	if (mipi->init_delay)
@@ -790,7 +855,7 @@ int mdss_dsi_on(struct mdss_panel_data *pdata)
 		mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
 
 end:
-	pr_debug("%s-:\n", __func__);
+	pr_info("%s-:\n", __func__);
 	return 0;
 }
 
@@ -889,14 +954,22 @@ static int mdss_dsi_unblank(struct mdss_panel_data *pdata)
 
 	if ((pdata->panel_info.type == MIPI_CMD_PANEL) &&
 		mipi->vsync_enable && mipi->hw_vsync_mode) {
+
 		mdss_dsi_set_tear_on(ctrl_pdata);
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+		if (pdata->panel_info.lge_pan_info.lge_panel_send_on_cmd == false){
+			pr_info("[PowerMode] %s: switch u2 to u3 ready \n", __func__);
+			lge_lg4945_panel_mode_cmd_send(LGE_PANEL_CMD_U3_READY, ctrl_pdata);
+		}
+#endif
 		if (mdss_dsi_is_te_based_esd(ctrl_pdata))
 			enable_irq(gpio_to_irq(ctrl_pdata->disp_te_gpio));
 	}
 
 error:
 	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
-	pr_debug("%s-:\n", __func__);
+	pr_info("%s-:\n", __func__);
 
 	return ret;
 }
@@ -906,7 +979,6 @@ static int mdss_dsi_blank(struct mdss_panel_data *pdata, int power_state)
 	int ret = 0;
 	struct mipi_panel_info *mipi;
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
-
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
 		return -EINVAL;
@@ -967,10 +1039,13 @@ static int mdss_dsi_blank(struct mdss_panel_data *pdata, int power_state)
 		}
 		ctrl_pdata->ctrl_state &= ~CTRL_STATE_PANEL_INIT;
 	}
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.post_mdss_dsi_blank)
+		ret = lge_mdss_dsi.post_mdss_dsi_blank(pdata, power_state);
+#endif
 error:
 	mdss_dsi_clk_ctrl(ctrl_pdata, DSI_ALL_CLKS, 0);
-	pr_debug("%s-:End\n", __func__);
+	pr_info("%s-:End\n", __func__);
 	return ret;
 }
 
@@ -1437,6 +1512,7 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 	int power_state;
 	u32 mode;
 
+
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
 		return -EINVAL;
@@ -1453,6 +1529,10 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		ctrl_pdata->refresh_clk_rate = true;
 		break;
 	case MDSS_EVENT_LINK_READY:
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+		if (lge_mdss_dsi.lge_mdss_dsi_event_handler)
+			lge_mdss_dsi.lge_mdss_dsi_event_handler(pdata, event, arg);
+#endif
 		if (ctrl_pdata->refresh_clk_rate)
 			rc = mdss_dsi_clk_refresh(pdata);
 
@@ -1473,10 +1553,14 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		pdata->panel_info.esd_rdy = true;
 		break;
 	case MDSS_EVENT_BLANK:
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+		if (lge_mdss_dsi.lge_mdss_dsi_event_handler)
+			lge_mdss_dsi.lge_mdss_dsi_event_handler(pdata, event, arg);
+#endif
 		power_state = (int) (unsigned long) arg;
 		if (ctrl_pdata->off_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
-		break;
+				break;
 	case MDSS_EVENT_PANEL_OFF:
 		power_state = (int) (unsigned long) arg;
 		pdata->panel_info.esd_rdy = false;
@@ -1484,6 +1568,10 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		if (ctrl_pdata->off_cmds.link_state == DSI_LP_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
 		rc = mdss_dsi_off(pdata, power_state);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+		if (lge_mdss_dsi.lge_mdss_dsi_event_handler)
+			lge_mdss_dsi.lge_mdss_dsi_event_handler(pdata, event, arg);
+#endif
 		break;
 	case MDSS_EVENT_CONT_SPLASH_FINISH:
 		if (ctrl_pdata->off_cmds.link_state == DSI_LP_MODE)
@@ -1724,12 +1812,27 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 		ctrl_pdata = devm_kzalloc(&pdev->dev,
 					  sizeof(struct mdss_dsi_ctrl_pdata),
 					  GFP_KERNEL);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+		if (!ctrl_pdata->lge_pan_data && sizeof(struct lge_pan_data)) {
+			ctrl_pdata->lge_pan_data = devm_kzalloc(&pdev->dev,
+					sizeof(struct lge_pan_data),
+					GFP_KERNEL);
+
+			if (!ctrl_pdata->lge_pan_data) {
+				pr_err("%s: FAILED: cannot alloc lge_pan_data ctrl\n",
+						__func__);
+				rc = -ENOMEM;
+				goto error_no_mem;
+			}
+		}
+#else
 		if (!ctrl_pdata) {
 			pr_err("%s: FAILED: cannot alloc dsi ctrl\n",
 			       __func__);
 			rc = -ENOMEM;
 			goto error_no_mem;
 		}
+#endif
 		platform_set_drvdata(pdev, ctrl_pdata);
 	}
 	ctrl_pdata->mdss_util = util;
@@ -1805,6 +1908,14 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 
 	cmd_cfg_cont_splash = mdss_panel_get_boot_cfg() ? true : false;
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (index == 0) //dual_dsi
+	{
+		memset(&lge_mdss_dsi, 0, sizeof(lge_mdss_dsi));
+		lge_mdss_dsi_seperate_panel_api_init(&lge_mdss_dsi, dsi_pan_node);
+	}
+#endif
+
 	rc = mdss_dsi_panel_init(dsi_pan_node, ctrl_pdata, cmd_cfg_cont_splash);
 	if (rc) {
 		pr_err("%s: dsi panel init failed\n", __func__);
@@ -1816,7 +1927,10 @@ static int mdss_dsi_ctrl_probe(struct platform_device *pdev)
 		pr_err("%s: dsi panel dev reg failed\n", __func__);
 		goto error_pan_node;
 	}
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_mdss_dsi_ctrl_probe)
+		lge_mdss_dsi.lge_mdss_dsi_ctrl_probe(pdev);
+#endif
 	ctrl_pdata->cmd_clk_ln_recovery_en =
 		of_property_read_bool(pdev->dev.of_node,
 			"qcom,dsi-clk-ln-recovery");
@@ -1843,6 +1957,10 @@ error_vreg:
 		mdss_dsi_put_dt_vreg_data(&pdev->dev,
 			&ctrl_pdata->power_data[i]);
 error_no_mem:
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (ctrl_pdata && ctrl_pdata->lge_pan_data)
+		devm_kfree(&pdev->dev, ctrl_pdata->lge_pan_data);
+#endif
 	devm_kfree(&pdev->dev, ctrl_pdata);
 
 	return rc;
@@ -2136,7 +2254,10 @@ int dsi_panel_device_register(struct device_node *pan_node,
 	} else {
 		ctrl_pdata->mode_gpio = -EINVAL;
 	}
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_dsi_panel_device_register)
+		lge_mdss_dsi.lge_dsi_panel_device_register(pan_node, ctrl_pdata);
+#endif
 	ctrl_pdata->timing_db_mode = of_property_read_bool(
 		ctrl_pdev->dev.of_node, "qcom,timing-db-mode");
 
@@ -2210,6 +2331,25 @@ int dsi_panel_device_register(struct device_node *pan_node,
 	 * suspend also.
 	 */
 	if (pinfo->ulps_suspend_enabled) {
+#if defined(CONFIG_LGE_MIPI_P1_INCELL_QHD_CMD_PANEL)
+		if ((pinfo->lge_pan_info.panel_type == LGD_INCELL_CMD_PANEL) ||
+			(pinfo->lge_pan_info.panel_type == LGD_LG4945_INCELL_CMD_PANEL)) {
+			/* Do nothing for P1 LGD or PPLUS LGD when suspend-ulps is enabled.
+			But for MIPI spec, DSI power must be enabled to keep MIPI lanes low.
+			And this change is just an w/a code, which could cause other side effects ,
+			and just for decrease of current consumption */
+			pr_info("%s: just skip to enable vregs for DSI_CTRL_PM, ulps_suspend_enabled\n", __func__);
+		} else {
+			rc = msm_dss_enable_vreg(
+				ctrl_pdata->power_data[DSI_CTRL_PM].vreg_config,
+				ctrl_pdata->power_data[DSI_CTRL_PM].num_vreg, 1);
+			if (rc) {
+				pr_err("%s: failed to enable vregs for DSI_CTRL_PM\n",
+					__func__);
+				return rc;
+			}
+		}
+#else
 		rc = msm_dss_enable_vreg(
 			ctrl_pdata->power_data[DSI_CTRL_PM].vreg_config,
 			ctrl_pdata->power_data[DSI_CTRL_PM].num_vreg, 1);
@@ -2218,6 +2358,7 @@ int dsi_panel_device_register(struct device_node *pan_node,
 				__func__);
 			return rc;
 		}
+#endif
 	}
 
 	if (pinfo->cont_splash_enabled) {
@@ -2268,11 +2409,14 @@ static const struct of_device_id mdss_dsi_ctrl_dt_match[] = {
 	{}
 };
 MODULE_DEVICE_TABLE(of, mdss_dsi_ctrl_dt_match);
-
 static struct platform_driver mdss_dsi_ctrl_driver = {
 	.probe = mdss_dsi_ctrl_probe,
 	.remove = mdss_dsi_ctrl_remove,
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	.shutdown = mdss_dsi_ctrl_shutdown,
+#else
 	.shutdown = NULL,
+#endif
 	.driver = {
 		.name = "mdss_dsi_ctrl",
 		.of_match_table = mdss_dsi_ctrl_dt_match,

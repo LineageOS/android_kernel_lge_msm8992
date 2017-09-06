@@ -23,6 +23,21 @@
 #include <linux/msm-bus.h>
 #include <linux/msm-bus-board.h>
 
+#if defined(CONFIG_LGE_CAM_PREVIEW_TUNE)
+struct mdp_csc_cfg mdp_csc_convert_wideband = {
+	0,
+	{
+		0x0200, 0x0000, 0x02CD,
+		0x0200, 0xFF4F, 0xFE91,
+		0x0200, 0x038B, 0x0000,
+	},
+	{ 0x0, 0xFF80, 0xFF80,},
+	{ 0x0, 0x0, 0x0,},
+	{ 0x0, 0xFF, 0x0, 0xFF, 0x0, 0xFF,},
+	{ 0x0, 0xFF, 0x0, 0xFF, 0x0, 0xFF,},
+};
+#endif
+
 struct mdp_csc_cfg mdp_csc_convert[MDSS_MDP_MAX_CSC] = {
 	[MDSS_MDP_CSC_RGB2RGB] = {
 		0,
@@ -73,6 +88,45 @@ struct mdp_csc_cfg mdp_csc_convert[MDSS_MDP_MAX_CSC] = {
 		{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
 	},
 };
+
+#if defined(CONFIG_LGE_BROADCAST_TDMB) || defined(CONFIG_LGE_BROADCAST_ISDBT_JAPAN)
+struct mdp_csc_cfg dmb_csc_convert = {
+#if defined(CONFIG_MACH_MSM8992_P1_KR) || defined(CONFIG_MACH_MSM8992_PPLUS_KR) || defined(CONFIG_MACH_MSM8992_P1A4WP_KR)
+	0,
+	{
+		0x0236, 0x0000, 0x0331,	/*283*/
+		0x025c, 0xff37, 0xfe60,	/*302*/
+		0x0276, 0x0409, 0x0000,	/*315*/
+	},
+	{ 0xfff0, 0xff80, 0xff80,},
+	{ 0x0, 0x0, 0x0,},
+	{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
+	{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
+#elif defined(CONFIG_MACH_MSM8992_P1_KDDI_JP)
+	0,
+	{
+		0x0252, 0x0000, 0x0331,
+		0x0234, 0xff37, 0xfe60,
+		0x0272, 0x0409, 0x0000,
+	},
+	{ 0xfff0, 0xff80, 0xff80,},
+	{ 0x0, 0x0, 0x0,},
+	{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
+	{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
+#else
+	0,
+	{
+		0x0254, 0x0000, 0x0331,
+		0x0254, 0xff37, 0xfe60,
+		0x0254, 0x0409, 0x0000,
+	},
+	{ 0xfff0, 0xff80, 0xff80,},
+	{ 0x0, 0x0, 0x0,},
+	{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
+	{ 0x0, 0xff, 0x0, 0xff, 0x0, 0xff,},
+#endif
+};
+#endif /* LGE_BROADCAST */
 
 /*
  * To program a linear LUT we need to make the slope to be 1/16 to enable
@@ -351,6 +405,25 @@ struct mdss_pp_res_type {
 static DEFINE_MUTEX(mdss_pp_mutex);
 static struct mdss_pp_res_type *mdss_pp_res;
 
+#if defined(CONFIG_LGE_BROADCAST_TDMB) || defined(CONFIG_LGE_BROADCAST_ISDBT_JAPAN)
+static int dmb_status; // on - 1, off - 0
+int pp_set_dmb_status(int flag) {
+	dmb_status = flag;
+	return 0;
+}
+#endif /* LGE_BROADCAST */
+
+#if defined(CONFIG_LGE_CAM_PREVIEW_TUNE)
+static int cam_preview_tune_status; // on - 1, off - 0
+int pp_set_cam_preview_tune_status(int flag) {
+	cam_preview_tune_status = flag;
+	return 0;
+}
+#endif /* LGE_CAM_PREVIEW_TUNE */
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+extern void mdss_fb_ad_set_brightness(struct msm_fb_data_type *mfd, u32 amb_light, int ad_on);
+#endif
+
 static int pp_hist_stop_wrapper(struct msm_fb_data_type *mfd);
 static u32 pp_hist_read(char __iomem *v_addr,
 				struct pp_hist_col_info *hist_info);
@@ -418,7 +491,7 @@ static int pp_read_pa_v2_regs(char __iomem *addr,
 static void pp_read_pa_mem_col_regs(char __iomem *addr,
 				struct mdp_pa_mem_col_cfg *mem_col_cfg);
 static struct msm_fb_data_type *mdss_get_mfd_from_index(int index);
-static int mdss_ad_init_checks(struct msm_fb_data_type *mfd);
+static int mdss_mdp_mfd_valid_ad(struct msm_fb_data_type *mfd);
 static int mdss_mdp_get_ad(struct msm_fb_data_type *mfd,
 					struct mdss_ad_info **ad);
 static int pp_ad_invalidate_input(struct msm_fb_data_type *mfd);
@@ -440,6 +513,7 @@ static int pp_ad_linearize_bl(struct mdss_ad_info *ad, u32 bl, u32 *bl_out,
 		int inv);
 static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 		bool *bl_out_notify);
+static int pp_ad_work_setup(struct msm_fb_data_type *mfd);
 static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd);
 static int pp_num_to_side(struct mdss_mdp_ctl *ctl, u32 num);
 static inline bool pp_sts_is_enabled(u32 sts, int side);
@@ -888,8 +962,28 @@ static int pp_vig_pipe_setup(struct mdss_mdp_pipe *pipe, u32 *op)
 			 * is a previously configured pipe need to re-configure
 			 * CSC matrix
 			 */
-			mdss_mdp_csc_setup(MDSS_MDP_BLOCK_SSPP, pipe->num,
-					   MDSS_MDP_CSC_YUV2RGB);
+#if !defined(CONFIG_LGE_BROADCAST_TDMB) && !defined(CONFIG_LGE_BROADCAST_ISDBT_JAPAN)
+#if !defined(CONFIG_LGE_CAM_PREVIEW_TUNE)
+			mdss_mdp_csc_setup(MDSS_MDP_BLOCK_SSPP, pipe->num, MDSS_MDP_CSC_YUV2RGB);
+#else
+			if(cam_preview_tune_status == 1) {
+				mdss_mdp_csc_setup_data(MDSS_MDP_BLOCK_SSPP, pipe->num, &mdp_csc_convert_wideband);
+			} else {
+				mdss_mdp_csc_setup(MDSS_MDP_BLOCK_SSPP, pipe->num, MDSS_MDP_CSC_YUV2RGB);
+			}
+#endif
+#else
+#if defined(CONFIG_LGE_CAM_PREVIEW_TUNE)
+			if(cam_preview_tune_status == 1) {
+				mdss_mdp_csc_setup_data(MDSS_MDP_BLOCK_SSPP, pipe->num, &mdp_csc_convert_wideband);
+			} else
+#endif
+			if (dmb_status == 1) {
+				mdss_mdp_csc_setup_data(MDSS_MDP_BLOCK_SSPP, pipe->num, &dmb_csc_convert);
+			} else {
+				mdss_mdp_csc_setup(MDSS_MDP_BLOCK_SSPP, pipe->num, MDSS_MDP_CSC_YUV2RGB);
+			}
+#endif /* LGE_BROADCAST */
 		}
 	}
 
@@ -2079,8 +2173,7 @@ int mdss_mdp_pp_resume(struct mdss_mdp_ctl *ctl, u32 dspp_num)
 				MDSS_MDP_AD_BL_SCALE);
 			pp_ad_input_write(&mdata->ad_off[dspp_num], ad);
 		}
-		if ((PP_AD_STATE_VSYNC & ad->state) && ad->calc_itr)
-			ctl->ops.add_vsync_handler(ctl, &ad->handle);
+		ad->state &= ~PP_AD_STATE_VSYNC;
 		mutex_unlock(&ad->lock);
 	}
 
@@ -2155,6 +2248,7 @@ int mdss_mdp_pp_init(struct device *dev)
 			init_completion(&vig[i].pp_res.hist.first_kick);
 		}
 	}
+
 exit_err:
 	mutex_unlock(&mdss_pp_mutex);
 	return ret;
@@ -2171,20 +2265,6 @@ void mdss_mdp_pp_term(struct device *dev)
 	}
 }
 
-int mdss_mdp_pp_override_pu(int enable)
-{
-	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
-
-	if (!mdata)
-		return -EPERM;
-
-	if ((enable != MDP_PP_ENABLE) && (enable != MDP_PP_DISABLE))
-		return -EINVAL;
-
-	mdata->pp_enable = enable;
-	return 0;
-}
-
 int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
@@ -2196,6 +2276,7 @@ int mdss_mdp_pp_overlay_init(struct msm_fb_data_type *mfd)
 
 	if (mdata->nad_cfgs) {
 		mfd->mdp.ad_calc_bl = pp_ad_calc_bl;
+		mfd->mdp.ad_work_setup = pp_ad_work_setup;
 		mfd->mdp.ad_shutdown_cleanup = pp_ad_shutdown_cleanup;
 	}
 	mfd->mdp.stop_histogram = pp_hist_stop_wrapper;
@@ -2272,6 +2353,31 @@ static int pp_ad_calc_bl(struct msm_fb_data_type *mfd, int bl_in, int *bl_out,
 	return 0;
 }
 
+static int pp_ad_work_setup(struct msm_fb_data_type *mfd)
+{
+	int i = 0;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+
+	if ((!mdata) || (!mfd))
+		return -EPERM;
+
+	if (mdata->ad_calc_wq)
+		goto remove_setup;
+
+	mdata->ad_calc_wq = create_singlethread_workqueue("ad_calc_wq");
+	for (i = 0; i < mdata->nad_cfgs; i++) {
+		mdata->ad_cfgs[i].ops = 0;
+		mdata->ad_cfgs[i].reg_sts = 0;
+		mdata->ad_cfgs[i].calc_itr = 0;
+		mdata->ad_cfgs[i].last_str = 0xFFFFFFFF;
+		mdata->ad_cfgs[i].last_bl = 0;
+	}
+
+remove_setup:
+	mfd->mdp.ad_work_setup = NULL;
+	return 0;
+}
+
 static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
@@ -2301,6 +2407,9 @@ static int pp_ad_shutdown_cleanup(struct msm_fb_data_type *mfd)
 	if (ctl && ctl->ops.remove_vsync_handler)
 		ctl->ops.remove_vsync_handler(ctl, &ad->handle);
 	cancel_work_sync(&ad->calc_work);
+
+	/* Add setup function in case of target not actually shutting down */
+	mfd->mdp.ad_work_setup = pp_ad_work_setup;
 
 	/* Check if any other AD config is active */
 	for (i = 0; i < mdata->nad_cfgs; i++) {
@@ -4415,67 +4524,37 @@ static inline bool pp_sts_is_enabled(u32 sts, int side)
 	return ret && (sts & PP_STS_ENABLE);
 }
 
-static int mdss_ad_init_checks(struct msm_fb_data_type *mfd)
+static int mdss_mdp_get_ad(struct msm_fb_data_type *mfd,
+					struct mdss_ad_info **ret_ad)
 {
-	u32 mixer_id[MDSS_MDP_INTF_MAX_LAYERMIXER];
-	u32 mixer_num;
-	u32 ret = -EINVAL;
-	int i = 0;
-	struct mdss_data_type *mdata = mfd_to_mdata(mfd);
-	struct msm_fb_data_type *ad_mfd = mfd;
+	int ret = 0;
+	struct mdss_data_type *mdata;
+	struct mdss_mdp_ctl *ctl = NULL;
 
-	if (ad_mfd->ext_ad_ctrl >= 0)
-		ad_mfd = mdss_get_mfd_from_index(ad_mfd->ext_ad_ctrl);
-
-	if (!ad_mfd || !mdata)
-		return ret;
+	*ret_ad = NULL;
+	if (!mfd) {
+		pr_err("invalid parameter mfd %p\n", mfd);
+		return -EINVAL;
+	}
+	mdata = mfd_to_mdata(mfd);
 
 	if (mdata->nad_cfgs == 0) {
 		pr_debug("Assertive Display not supported by device\n");
 		return -ENODEV;
 	}
 
-	if (ad_mfd->panel_info->type == DTV_PANEL) {
-		pr_debug("AD not supported on external display\n");
-		return ret;
+	if (!mdss_mdp_mfd_valid_ad(mfd)) {
+		pr_warn("AD not supported on display num %d hw config\n",
+				mfd->index);
+		return -EPERM;
 	}
 
-	mixer_num = mdss_mdp_get_ctl_mixers(ad_mfd->index, mixer_id);
-	if (!mixer_num) {
-		pr_debug("no mixers connected, %d\n", mixer_num);
-		return -EHOSTDOWN;
-	}
-	if (mixer_num > mdata->nmax_concurrent_ad_hw) {
-		pr_debug("too many mixers, not supported, %d > %d\n", mixer_num,
-						mdata->nmax_concurrent_ad_hw);
-		return ret;
-	}
-
-	do {
-		if (mixer_id[i] >= mdata->nad_cfgs) {
-			pr_err("invalid mixer input, %d\n", mixer_id[i]);
-			return ret;
-		}
-		i++;
-	} while (i < mixer_num);
-
-	return mixer_id[0];
-}
-
-static int mdss_mdp_get_ad(struct msm_fb_data_type *mfd,
-					struct mdss_ad_info **ret_ad)
-{
-	int ad_num, ret = 0;
-	struct mdss_data_type *mdata;
-	struct mdss_ad_info *ad = NULL;
-	mdata = mfd_to_mdata(mfd);
-
-	ad_num = mdss_ad_init_checks(mfd);
-	if (ad_num >= 0)
-		ad = &mdata->ad_cfgs[ad_num];
+	ctl = mfd_to_ctl(mfd);
+	if ((ctl) && (ctl->mixer_left))
+		*ret_ad = &mdata->ad_cfgs[ctl->mixer_left->num];
 	else
-		ret = ad_num;
-	*ret_ad = ad;
+		ret = -EPERM;
+
 	return ret;
 }
 
@@ -4484,20 +4563,18 @@ static int pp_ad_invalidate_input(struct msm_fb_data_type *mfd)
 {
 	int ret;
 	struct mdss_ad_info *ad;
-	struct mdss_mdp_ctl *ctl;
 
 	if (!mfd) {
 		pr_err("Invalid mfd\n");
 		return -EINVAL;
 	}
-	ctl = mfd_to_ctl(mfd);
-	if (!ctl) {
-		pr_err("Invalid ctl\n");
-		return -EINVAL;
-	}
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
-	if (ret || !ad) {
+	if (ret == -ENODEV || ret == -EPERM) {
+		pr_debug("AD not supported on device, disp num %d\n",
+			mfd->index);
+		return 0;
+	} else if (ret || !ad) {
 		pr_err("Fail to get ad: ret = %d, ad = 0x%pK\n", ret, ad);
 		return -EINVAL;
 	}
@@ -4526,8 +4603,16 @@ int mdss_mdp_ad_config(struct msm_fb_data_type *mfd,
 	u32 last_ops;
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
-	if (ret)
+	if (ret == -ENODEV || ret == -EPERM) {
+		pr_err("AD not supported on device, disp num %d\n",
+			mfd->index);
 		return ret;
+	} else if (ret || !ad) {
+		pr_err("Failed to get ad info: ret = %d, ad = 0x%p.\n",
+			ret, ad);
+		return ret;
+	}
+
 	if (mfd->panel_info->type == WRITEBACK_PANEL) {
 		bl_mfd = mdss_get_mfd_from_index(0);
 		if (!bl_mfd)
@@ -4609,6 +4694,9 @@ int mdss_mdp_ad_config(struct msm_fb_data_type *mfd,
 	if (!ret && (init_cfg->ops & MDP_PP_OPS_DISABLE)) {
 		ad->sts &= ~PP_STS_ENABLE;
 		mutex_unlock(&ad->lock);
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+        mdss_fb_ad_set_brightness(mfd, 0, 0);
+#endif
 		cancel_work_sync(&ad->calc_work);
 		mutex_lock(&ad->lock);
 		ad->mfd = NULL;
@@ -4623,6 +4711,12 @@ ad_config_exit:
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_DUAL_BACKLIGHT)
+#if IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
+    extern void lm3697_set_level_no_mapping(int bl_level);
+#endif
+#endif
+
 int mdss_mdp_ad_input(struct msm_fb_data_type *mfd,
 			struct mdss_ad_input *input, int wait) {
 	int ret = 0;
@@ -4630,8 +4724,15 @@ int mdss_mdp_ad_input(struct msm_fb_data_type *mfd,
 	u32 bl;
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
-	if (ret)
+	if (ret == -ENODEV || ret == -EPERM) {
+		pr_err("AD not supported on device, disp num %d\n",
+			mfd->index);
 		return ret;
+	} else if (ret || !ad) {
+		pr_err("Failed to get ad info: ret = %d, ad = 0x%p.\n",
+			ret, ad);
+		return ret;
+	}
 
 	mutex_lock(&ad->lock);
 	if ((!PP_AD_STATE_IS_INITCFG(ad->state) &&
@@ -4655,11 +4756,16 @@ int mdss_mdp_ad_input(struct msm_fb_data_type *mfd,
 			goto error;
 		}
 		ad->ad_data_mode = MDSS_AD_INPUT_AMBIENT;
-		pr_debug("ambient = %d\n", input->in.amb_light);
+		pr_err("ambient = %d\n", input->in.amb_light);
 		ad->ad_data = input->in.amb_light;
 		ad->calc_itr = ad->cfg.stab_itr;
 		ad->sts |= PP_AD_STS_DIRTY_VSYNC;
 		ad->sts |= PP_AD_STS_DIRTY_DATA;
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+        mutex_unlock(&ad->lock);
+        mdss_fb_ad_set_brightness(mfd, input->in.amb_light, 1);
+        mutex_lock(&ad->lock);
+#endif
 		break;
 	case MDSS_AD_MODE_TARG_STR:
 	case MDSS_AD_MODE_MAN_STR:
@@ -4693,6 +4799,11 @@ int mdss_mdp_ad_input(struct msm_fb_data_type *mfd,
 			MDSS_BRIGHT_TO_BL(bl, bl, mfd->panel_info->bl_max,
 					mfd->panel_info->brightness_max);
 			mdss_fb_set_backlight(mfd, bl);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_DUAL_BACKLIGHT)
+#if IS_ENABLED(CONFIG_BACKLIGHT_LM3697)
+            lm3697_set_level_no_mapping(bl >> 4);  // downscaling from 12bits to 8bits
+#endif
+#endif
 			mutex_unlock(&mfd->bl_lock);
 			mutex_lock(&ad->lock);
 			mfd->calib_mode_bl = bl;
@@ -4713,14 +4824,7 @@ error:
 			INIT_COMPLETION(ad->comp);
 			mutex_unlock(&ad->lock);
 		}
-		if (wait) {
-			ret = wait_for_completion_timeout(
-					&ad->comp, HIST_WAIT_TIMEOUT(1));
-			if (ret == 0)
-				ret = -ETIMEDOUT;
-			else if (ret > 0)
-				input->output = ad->last_str;
-		}
+		input->output = ad->last_str;
 	}
 	return ret;
 }
@@ -4960,10 +5064,14 @@ static int mdss_mdp_ad_setup(struct msm_fb_data_type *mfd)
 	u32 width;
 
 	ret = mdss_mdp_get_ad(mfd, &ad);
-	if (ret) {
-		ret = -EINVAL;
-		pr_debug("failed to get ad_info, err = %d\n", ret);
-		goto exit;
+	if (ret == -ENODEV || ret == -EPERM) {
+		pr_debug("AD not supported on device, disp num %d\n",
+			mfd->index);
+		return 0;
+	} else if (ret || !ad) {
+		pr_err("Failed to get ad info: ret = %d, ad = 0x%p.\n",
+			ret, ad);
+		return ret;
 	}
 	if (mfd->panel_info->type == WRITEBACK_PANEL) {
 		bl_mfd = mdss_get_mfd_from_index(0);
@@ -5335,16 +5443,10 @@ int mdss_mdp_ad_addr_setup(struct mdss_data_type *mdata, u32 *ad_offsets)
 		return -ENOMEM;
 	}
 
-	mdata->ad_calc_wq = create_singlethread_workqueue("ad_calc_wq");
 	for (i = 0; i < mdata->nad_cfgs; i++) {
 		mdata->ad_off[i].base = mdata->mdss_io.base + ad_offsets[i];
 		mdata->ad_off[i].num = i;
 		mdata->ad_cfgs[i].num = i;
-		mdata->ad_cfgs[i].ops = 0;
-		mdata->ad_cfgs[i].reg_sts = 0;
-		mdata->ad_cfgs[i].calc_itr = 0;
-		mdata->ad_cfgs[i].last_str = 0xFFFFFFFF;
-		mdata->ad_cfgs[i].last_bl = 0;
 		mutex_init(&mdata->ad_cfgs[i].lock);
 		init_completion(&mdata->ad_cfgs[i].comp);
 		mdata->ad_cfgs[i].handle.vsync_handler = pp_ad_vsync_handler;
@@ -5756,3 +5858,18 @@ int mdss_mdp_calib_config_buffer(struct mdp_calib_config_buffer *cfg,
 	kfree(buff_org);
 	return ret;
 }
+
+static int mdss_mdp_mfd_valid_ad(struct msm_fb_data_type *mfd)
+{
+	struct mdss_mdp_ctl *ctl = NULL;
+	int valid_ad = false;
+	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
+
+	ctl = mfd_to_ctl(mfd);
+	valid_ad = (ctl) && (ctl->mixer_left) &&
+			(ctl->mixer_left->num < mdata->nad_cfgs);
+	if ((ctl) && (ctl->mixer_right))
+		valid_ad &= (ctl->mixer_right->num < mdata->nad_cfgs);
+	return valid_ad;
+}
+

@@ -41,8 +41,8 @@
 #define DBG(f, x...) \
 	pr_debug(DRIVER_NAME " [%s()]: " f, __func__,## x)
 
-#if defined(CONFIG_LEDS_CLASS) || (defined(CONFIG_LEDS_CLASS_MODULE) && \
-	defined(CONFIG_MMC_SDHCI_MODULE))
+#if (defined(CONFIG_LEDS_CLASS) || (defined(CONFIG_LEDS_CLASS_MODULE) && \
+	defined(CONFIG_MMC_SDHCI_MODULE))) && !defined(CONFIG_MACH_LGE)
 #define SDHCI_USE_LEDS_CLASS
 #endif
 
@@ -53,6 +53,10 @@
 
 static unsigned int debug_quirks = 0;
 static unsigned int debug_quirks2;
+
+#if defined(CONFIG_MACH_MSM8992_PPLUS) && defined(CONFIG_MMC_SDHCI_MSM)
+extern bool attempt_cdr_unlock;
+#endif
 
 static void sdhci_finish_data(struct sdhci_host *);
 
@@ -95,6 +99,52 @@ static inline int sdhci_get_async_int_status(struct sdhci_host *host)
 	return (sdhci_readw(host, SDHCI_HOST_CONTROL2) &
 		 SDHCI_CTRL_ASYNC_INT_ENABLE) >> 14;
 }
+
+#ifdef CONFIG_LGE_PM
+int read_shutdown_soc(char *filename, int pos)
+{
+	struct file *filp;
+	char read_val;
+
+	mm_segment_t old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	filp = filp_open(filename, O_RDWR, S_IRUSR|S_IWUSR);
+	if(IS_ERR(filp)){
+		pr_err("open error hanshin open : %ld\n", IS_ERR(filp));
+		return -1;
+	}
+	filp->f_pos = pos;
+
+	vfs_read(filp, &read_val, 5, &filp->f_pos);
+	filp_close(filp, NULL);
+	set_fs(old_fs);
+
+	return read_val;
+}
+EXPORT_SYMBOL_GPL(read_shutdown_soc);
+
+void write_shutdown_soc(char *filename, char write_val, int pos)
+{
+	struct file *filp;
+
+	mm_segment_t old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	filp = filp_open(filename, O_CREAT | O_RDWR, S_IRUSR|S_IWUSR);
+	if(IS_ERR(filp)){
+		pr_err("open error hanshin write: %ld\n", IS_ERR(filp));
+		return;
+	}
+	filp->f_pos = pos;
+
+	vfs_write(filp, &write_val, 5, &filp->f_pos);
+	filp_close(filp, NULL);
+	set_fs(old_fs);
+	return;
+}
+EXPORT_SYMBOL_GPL(write_shutdown_soc);
+#endif
 
 static void sdhci_dump_state(struct sdhci_host *host)
 {
@@ -381,7 +431,7 @@ static void sdhci_reinit(struct sdhci_host *host)
 	}
 	sdhci_enable_card_detection(host);
 }
-
+#if !defined(SDHCI_USE_LEDS_CLASS) && !defined(CONFIG_MACH_LGE)
 static void sdhci_activate_led(struct sdhci_host *host)
 {
 	u8 ctrl;
@@ -390,7 +440,6 @@ static void sdhci_activate_led(struct sdhci_host *host)
 	ctrl |= SDHCI_CTRL_LED;
 	sdhci_writeb(host, ctrl, SDHCI_HOST_CONTROL);
 }
-
 static void sdhci_deactivate_led(struct sdhci_host *host)
 {
 	u8 ctrl;
@@ -399,7 +448,7 @@ static void sdhci_deactivate_led(struct sdhci_host *host)
 	ctrl &= ~SDHCI_CTRL_LED;
 	sdhci_writeb(host, ctrl, SDHCI_HOST_CONTROL);
 }
-
+#endif
 #ifdef SDHCI_USE_LEDS_CLASS
 static void sdhci_led_control(struct led_classdev *led,
 	enum led_brightness brightness)
@@ -899,7 +948,9 @@ static void sdhci_prepare_data(struct sdhci_host *host, struct mmc_command *cmd)
 	struct mmc_data *data = cmd->data;
 	int ret;
 
+#ifndef CONFIG_LGE_MMC_CQ_ENABLE
 	WARN_ON(host->data);
+#endif
 
 	if (data || (cmd->flags & MMC_RSP_BUSY)) {
 		count = sdhci_calc_timeout(host, cmd);
@@ -908,6 +959,10 @@ static void sdhci_prepare_data(struct sdhci_host *host, struct mmc_command *cmd)
 
 	if (!data)
 		return;
+
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	WARN_ON(host->data);
+#endif
 
 	/* Sanity checks */
 	BUG_ON(data->blksz * data->blocks > host->mmc->max_req_size);
@@ -1080,6 +1135,22 @@ static void sdhci_set_transfer_mode(struct sdhci_host *host,
 	WARN_ON(!host->data);
 
 	mode = SDHCI_TRNS_BLK_CNT_EN;
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	if (mmc_op_cmdq_execute_task(cmd->opcode) && (data->blocks > 1))
+		mode |= SDHCI_TRNS_MULTI;
+	else if (mmc_op_multi(cmd->opcode) || (data->blocks > 1)) {
+		mode |= SDHCI_TRNS_MULTI;
+		/*
+		 * If we are sending CMD23, CMD12 never gets sent
+		 * on successful completion (so no Auto-CMD12).
+		 */
+		if (!host->mrq->precmd && (host->flags & SDHCI_AUTO_CMD12))
+			mode |= SDHCI_TRNS_AUTO_CMD12;
+		else if (host->mrq->precmd && (host->flags & SDHCI_AUTO_CMD23)) {
+			mode |= SDHCI_TRNS_AUTO_CMD23;
+			sdhci_writel(host, host->mrq->precmd->arg, SDHCI_ARGUMENT2);
+		}
+#else
 	if (mmc_op_multi(cmd->opcode) || data->blocks > 1) {
 		mode |= SDHCI_TRNS_MULTI;
 		/*
@@ -1092,14 +1163,21 @@ static void sdhci_set_transfer_mode(struct sdhci_host *host,
 			mode |= SDHCI_TRNS_AUTO_CMD23;
 			sdhci_writel(host, host->mrq->sbc->arg, SDHCI_ARGUMENT2);
 		}
+#endif
 	}
 
 	if (data->flags & MMC_DATA_READ) {
 		mode |= SDHCI_TRNS_READ;
 		if (host->ops->toggle_cdr) {
+#if defined(CONFIG_MACH_MSM8992_PPLUS) && defined(CONFIG_MMC_SDHCI_MSM)
+			if (((cmd->opcode == MMC_SEND_TUNING_BLOCK_HS200) ||
+				(cmd->opcode == MMC_SEND_TUNING_BLOCK_HS400) ||
+				(cmd->opcode == MMC_SEND_TUNING_BLOCK)) && !attempt_cdr_unlock)
+#else
 			if ((cmd->opcode == MMC_SEND_TUNING_BLOCK_HS200) ||
 				(cmd->opcode == MMC_SEND_TUNING_BLOCK_HS400) ||
 				(cmd->opcode == MMC_SEND_TUNING_BLOCK))
+#endif
 				host->ops->toggle_cdr(host, false);
 			else
 				host->ops->toggle_cdr(host, true);
@@ -1153,8 +1231,11 @@ static void sdhci_finish_data(struct sdhci_host *host)
 	 */
 	if (data->stop &&
 	    (data->error ||
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	     !host->mrq->precmd)) {
+#else
 	     !host->mrq->sbc)) {
-
+#endif
 		/*
 		 * The controller needs a reset of internal state machines
 		 * upon error conditions.
@@ -1165,8 +1246,17 @@ static void sdhci_finish_data(struct sdhci_host *host)
 		}
 
 		sdhci_send_command(host, data->stop);
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	} else {
+		if (host->mmc->context_info.is_cmdq_busy)
+			tasklet_schedule(&host->finish_async_data_tasklet);
+		else
+			tasklet_schedule(&host->finish_tasklet);
+	}
+#else
 	} else
 		tasklet_schedule(&host->finish_tasklet);
+#endif
 }
 
 #define SDHCI_REQUEST_TIMEOUT	10 /* Default request timeout in seconds */
@@ -1246,6 +1336,14 @@ static void sdhci_send_command(struct sdhci_host *host, struct mmc_command *cmd)
 	    cmd->opcode == MMC_SEND_TUNING_BLOCK_HS200)
 		flags |= SDHCI_CMD_DATA;
 
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	/* CMD46/47 doesn't wait for data */
+	if (mmc_op_cmdq_execute_task(cmd->opcode)) {
+		cmd->data = NULL;
+		host->mrq->data = NULL;
+	}
+#endif
+
 	if (cmd->data)
 		host->data_start_time = ktime_get();
 	trace_mmc_cmd_rw_start(cmd->opcode, cmd->arg, cmd->flags);
@@ -1275,10 +1373,19 @@ static void sdhci_finish_command(struct sdhci_host *host)
 	}
 
 	/* Finished CMD23, now send actual command. */
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	if (host->cmd == host->mrq->precmd) {
+#else
 	if (host->cmd == host->mrq->sbc) {
+#endif
 		host->cmd->error = 0;
 		host->cmd = NULL;
 		sdhci_send_command(host, host->mrq->cmd);
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	} else if ((host->cmd == host->mrq->cmd) && host->mrq->cmd2) {
+		host->cmd = NULL;
+		sdhci_send_command(host, host->mrq->cmd2);
+#endif
 	} else {
 
 		/* Processed actual command. */
@@ -1782,7 +1889,7 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
 	WARN_ON(host->mrq != NULL);
 
-#ifndef SDHCI_USE_LEDS_CLASS
+#if !defined(SDHCI_USE_LEDS_CLASS) && !defined(CONFIG_MACH_LGE)
 	sdhci_activate_led(host);
 #endif
 
@@ -1790,7 +1897,11 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	 * Ensure we don't send the STOP for non-SET_BLOCK_COUNTED
 	 * requests if Auto-CMD12 is enabled.
 	 */
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	if (!mrq->precmd && (host->flags & SDHCI_AUTO_CMD12)) {
+#else
 	if (!mrq->sbc && (host->flags & SDHCI_AUTO_CMD12)) {
+#endif
 		if (mrq->stop) {
 			mrq->data->stop = NULL;
 			mrq->stop = NULL;
@@ -1817,6 +1928,11 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 		    (host->flags & SDHCI_NEEDS_RETUNING) &&
 		    !(present_state & (SDHCI_DOING_WRITE | SDHCI_DOING_READ))) {
 			if (mmc->card) {
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+				/* don't do tuning when cmdq is not empty */
+				if (mmc->context_info.is_cmdq_busy)
+					goto end_tuning;
+#endif
 				/* eMMC uses cmd21 but sd and sdio use cmd19 */
 				tuning_opcode =
 					mmc->card->type == MMC_TYPE_MMC ?
@@ -1842,8 +1958,21 @@ static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 					sdhci_get_tuning_cmd(host));
 		}
 
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+end_tuning:
+		if (mrq->precmd) {
+			if (mrq->precmd->opcode == 23) {
+				if (!(host->flags & SDHCI_AUTO_CMD23))
+					sdhci_send_command(host, mrq->precmd);
+				else
+					sdhci_send_command(host, mrq->cmd);
+			} else
+				sdhci_send_command(host, mrq->precmd);
+		}
+#else
 		if (mrq->sbc && !(host->flags & SDHCI_AUTO_CMD23))
 			sdhci_send_command(host, mrq->sbc);
+#endif
 		else
 			sdhci_send_command(host, mrq->cmd);
 	}
@@ -2752,11 +2881,68 @@ static void sdhci_tasklet_card(unsigned long param)
 	mmc_detect_change(host->mmc, msecs_to_jiffies(200));
 }
 
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+static void sdhci_tasklet_finish_async_data(unsigned long param)
+{
+	struct sdhci_host *host;
+	unsigned long flags;
+	struct mmc_request *mrq;
+
+	host = (struct sdhci_host*)param;
+
+	spin_lock_irqsave(&host->lock, flags);
+
+        /*
+         * If this tasklet gets rescheduled while running, it will
+         * be run again afterwards but without any active request.
+         */
+	if (!host->mmc->areq || !host->mmc->areq->mrq->data) {
+		spin_unlock_irqrestore(&host->lock, flags);
+		return;
+	}
+
+	del_timer(&host->timer);
+
+	mrq = host->mmc->areq->mrq;
+
+	/*
+	 * The controller needs a reset of internal state machines
+	 * upon error conditions.
+	 */
+	if (!(host->flags & SDHCI_DEVICE_DEAD) &&
+	    ((mrq->data && mrq->data->error) ||
+	     (host->quirks & SDHCI_QUIRK_RESET_AFTER_REQUEST))) {
+
+		/* Some controllers need this kick or reset won't work here */
+		if (host->quirks & SDHCI_QUIRK_CLOCK_BEFORE_RESET)
+			/* This is to force an update */
+			host->ops->set_clock(host, host->clock);
+
+		sdhci_reset(host, SDHCI_RESET_DATA);
+	}
+
+	host->data = NULL;
+
+#if !defined(SDHCI_USE_LEDS_CLASS) && !defined(CONFIG_MACH_LGE)
+	sdhci_deactivate_led(host);
+#endif
+	mmiowb();
+	spin_unlock_irqrestore(&host->lock, flags);
+
+	mmc_request_done(host->mmc, mrq);
+
+	sdhci_runtime_pm_put(host);
+}
+#endif
+
 static void sdhci_tasklet_finish(unsigned long param)
 {
 	struct sdhci_host *host;
 	unsigned long flags;
 	struct mmc_request *mrq;
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	int opcode;
+#endif
 
 	host = (struct sdhci_host*)param;
 
@@ -2771,9 +2957,19 @@ static void sdhci_tasklet_finish(unsigned long param)
 		return;
 	}
 
+#ifndef CONFIG_LGE_MMC_CQ_ENABLE
 	del_timer(&host->timer);
+#endif
 
 	mrq = host->mrq;
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	BUG_ON(!mrq->cmd);
+	opcode = mrq->cmd->opcode;
+
+	/* for CMD46/47, doesn't delete timer */
+	if (!mmc_op_cmdq_execute_task(opcode))
+		del_timer(&host->timer);
+#endif
 
 	/*
 	 * The controller needs a reset of internal state machines
@@ -2801,18 +2997,39 @@ static void sdhci_tasklet_finish(unsigned long param)
 
 	host->mrq = NULL;
 	host->cmd = NULL;
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	if(!host->mmc->context_info.is_cmdq_busy)
+		host->data = NULL;
+#else
 	host->data = NULL;
+#endif
 	host->auto_cmd_err_sts = 0;
 
-#ifndef SDHCI_USE_LEDS_CLASS
-	sdhci_deactivate_led(host);
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	/* CMD46/47 sill have pending data */
+	if (!mmc_op_cmdq_execute_task(opcode)) {
+#endif
+#if !defined(SDHCI_USE_LEDS_CLASS) && !defined(CONFIG_MACH_LGE)
+		sdhci_deactivate_led(host);
+#endif
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	}
 #endif
 
 	mmiowb();
 	spin_unlock_irqrestore(&host->lock, flags);
 
 	mmc_request_done(host->mmc, mrq);
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	/*
+	 * host will be put in D0i3 when pending data is done
+	 * for CMD46/47
+	 */
+	if (!mmc_op_cmdq_execute_task(opcode))
+		sdhci_runtime_pm_put(host);
+#else
 	sdhci_runtime_pm_put(host);
+#endif
 }
 
 static void sdhci_timeout_timer(unsigned long data)
@@ -2828,6 +3045,14 @@ static void sdhci_timeout_timer(unsigned long data)
 		if (!host->mrq->cmd->ignore_timeout) {
 			pr_err("%s: Timeout waiting for hardware interrupt.\n",
 			       mmc_hostname(host->mmc));
+#if defined(CONFIG_BCMDHD) || defined (CONFIG_BCMDHD_MODULE)
+			if (!strcmp(mmc_hostname(host->mmc), "mmc2") && host->mmc->ios.clock == 0) {
+				pr_err("Timeout waiting for hardware interrupt. nothing to do return\n");
+				mmiowb();
+				spin_unlock_irqrestore(&host->lock, flags);
+				return;
+			}
+#endif
 			if (host->data)
 				sdhci_show_adma_error(host);
 			else
@@ -3023,6 +3248,9 @@ static void sdhci_data_irq(struct sdhci_host *host, u32 intmask)
 			"though no data operation was in progress.\n",
 			mmc_hostname(host->mmc), (unsigned)intmask);
 		sdhci_dumpregs(host);
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+		dump_stack();
+#endif
 
 		return;
 	}
@@ -3093,7 +3321,12 @@ static void sdhci_data_irq(struct sdhci_host *host, u32 intmask)
 		}
 
 		if (intmask & SDHCI_INT_DATA_END) {
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+			if (!host->mmc->context_info.is_cmdq_busy &&
+					host->cmd) {
+#else
 			if (host->cmd) {
+#endif
 				/*
 				 * Data managed to finish before the
 				 * command completed. Make sure we do
@@ -4021,6 +4254,10 @@ int sdhci_add_host(struct sdhci_host *host)
 		sdhci_tasklet_card, (unsigned long)host);
 	tasklet_init(&host->finish_tasklet,
 		sdhci_tasklet_finish, (unsigned long)host);
+#ifdef CONFIG_LGE_MMC_CQ_ENABLE
+	tasklet_init(&host->finish_async_data_tasklet,
+		sdhci_tasklet_finish_async_data, (unsigned long)host);
+#endif
 
 	setup_timer(&host->timer, sdhci_timeout_timer, (unsigned long)host);
 

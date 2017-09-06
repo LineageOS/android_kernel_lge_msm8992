@@ -638,12 +638,34 @@ static void process_rx_w(struct work_struct *work)
 				|| ETH_HLEN > skb->len
 				|| (skb->len > ETH_FRAME_LEN &&
 				test_bit(RMNET_MODE_LLP_ETH, &dev->flags))) {
+#ifdef CONFIG_LGE_USB_G_NCM
+		/*
+		  Need to revisit net->mtu	does not include header size incase of changed MTU
+		*/
+			if(!strcmp(dev->port_usb->func.name,"ncm")) {
+				if (status < 0
+					|| ETH_HLEN > skb->len
+					|| skb->len > (dev->net->mtu + ETH_HLEN)) {
+					printk(KERN_ERR "usb: %s  drop incase of NCM rx length %d\n",__func__,skb->len);
+				} else {
+					printk(KERN_ERR "usb: %s  Dont drop incase of NCM rx length %d\n",__func__,skb->len);
+					goto process_frame;
+				}
+			}
+#endif
 			dev->net->stats.rx_errors++;
 			dev->net->stats.rx_length_errors++;
+#ifndef CONFIG_LGE_USB_G_NCM
 			DBG(dev, "rx length %d\n", skb->len);
+#else
+			printk(KERN_DEBUG "usb: %s Drop rx length %d\n",__func__,skb->len);
+#endif
 			dev_kfree_skb_any(skb);
 			continue;
 		}
+#ifdef CONFIG_LGE_USB_G_NCM
+process_frame:
+#endif
 		if (test_bit(RMNET_MODE_LLP_IP, &dev->flags))
 			skb->protocol = ether_ip_type_trans(skb, dev->net);
 		else
@@ -701,6 +723,9 @@ static void tx_complete(struct usb_ep *ep, struct usb_request *req)
 	default:
 		dev->net->stats.tx_errors++;
 		VDBG(dev, "tx err %d\n", req->status);
+#ifdef CONFIG_LGE_USB_G_NCM
+		printk(KERN_ERR"usb:%s tx err %d\n",__func__, req->status);
+#endif
 		/* FALLTHROUGH */
 	case -ECONNRESET:		/* unlink */
 	case -ESHUTDOWN:		/* disconnect etc */
@@ -1351,7 +1376,7 @@ static int get_ether_addr(const char *str, u8 *dev_addr)
 				str++;
 			num = hex_to_bin(*str++) << 4;
 			num |= hex_to_bin(*str++);
-			dev_addr [i] = num;
+			dev_addr[i] = num;
 		}
 		if (is_valid_ether_addr(dev_addr))
 			return 0;
@@ -1403,7 +1428,7 @@ static int rmnet_ioctl_extended(struct net_device *dev, struct ifreq *ifr)
 			    sizeof(struct rmnet_ioctl_extended_s));
 
 	if (rc) {
-		DBG("%s(): copy_from_user() failed\n", __func__);
+		DBG(eth_dev, "%s(): copy_from_user() failed\n", __func__);
 		return rc;
 	}
 
@@ -1424,8 +1449,8 @@ static int rmnet_ioctl_extended(struct net_device *dev, struct ifreq *ifr)
 			eth_dev->port_usb->is_fixed = true;
 			eth_dev->port_usb->fixed_out_len =
 				(size_t) ext_cmd.u.data;
-			DBG("[%s] rmnet_ioctl(): SET MRU to %u\n", dev->name,
-				eth_dev->mru);
+			DBG(eth_dev, "[%s] rmnet_ioctl(): SET MRU to %u\n", dev->name,
+				eth_dev->port_usb->fixed_out_len);
 		} else {
 			pr_err("[%s]: %s: SET MRU failed. Cable disconnected\n",
 				dev->name, __func__);
@@ -1458,7 +1483,7 @@ static int rmnet_ioctl_extended(struct net_device *dev, struct ifreq *ifr)
 			  sizeof(struct rmnet_ioctl_extended_s));
 
 	if (rc)
-		DBG("%s(): copy_to_user() failed\n", __func__);
+		DBG(eth_dev, "%s(): copy_to_user() failed\n", __func__);
 	return rc;
 }
 

@@ -807,6 +807,7 @@ static int64_t qpnp_adc_scale_ratiometric_calib(int32_t adc_code,
 	return adc_voltage;
 }
 
+int pmic_temp = 0; /* [LGE_UPDATE] */
 int32_t qpnp_adc_scale_pmic_therm(struct qpnp_vadc_chip *vadc,
 		int32_t adc_code,
 		const struct qpnp_adc_properties *adc_properties,
@@ -849,9 +850,21 @@ int32_t qpnp_adc_scale_pmic_therm(struct qpnp_vadc_chip *vadc,
 	adc_chan_result->measurement -= KELVINMIL_DEGMIL;
 	adc_chan_result->physical = (int32_t)adc_chan_result->measurement;
 
+	pmic_temp = adc_chan_result->physical; /* [LGE_UPDATE] */
+
 	return 0;
 }
 EXPORT_SYMBOL(qpnp_adc_scale_pmic_therm);
+
+
+/* [LGE_UPDATE_S] */
+int lge_get_pmic_therm(void)
+{
+     return pmic_temp;
+}
+EXPORT_SYMBOL(lge_get_pmic_therm);
+
+/* [LGE_UPDATE_E] */
 
 int32_t qpnp_adc_scale_millidegc_pmic_voltage_thr(struct qpnp_vadc_chip *chip,
 		struct qpnp_adc_tm_btm_param *param,
@@ -1130,6 +1143,8 @@ int32_t qpnp_adc_scale_therm_pu1(struct qpnp_vadc_chip *chip,
 }
 EXPORT_SYMBOL(qpnp_adc_scale_therm_pu1);
 
+
+int pa_temp = 0; /* [LGE_UPDATE] */
 int32_t qpnp_adc_scale_therm_pu2(struct qpnp_vadc_chip *chip,
 		int32_t adc_code,
 		const struct qpnp_adc_properties *adc_properties,
@@ -1145,9 +1160,19 @@ int32_t qpnp_adc_scale_therm_pu2(struct qpnp_vadc_chip *chip,
 		ARRAY_SIZE(adcmap_100k_104ef_104fb),
 		therm_voltage, &adc_chan_result->physical);
 
+	pa_temp = adc_chan_result->physical; /* [LGE_UPDATE] */
+
 	return 0;
 }
 EXPORT_SYMBOL(qpnp_adc_scale_therm_pu2);
+
+/* [LGE_UPDATE_S] */
+int lge_get_pa_therm(void)
+{
+   return pa_temp;
+}
+EXPORT_SYMBOL(lge_get_pa_therm);
+
 
 int32_t qpnp_adc_tm_scale_voltage_therm_pu2(struct qpnp_vadc_chip *chip,
 					uint32_t reg, int64_t *result)
@@ -1243,6 +1268,42 @@ int32_t qpnp_adc_scale_batt_id(struct qpnp_vadc_chip *chip,
 	return 0;
 }
 EXPORT_SYMBOL(qpnp_adc_scale_batt_id);
+
+#ifdef CONFIG_LGE_PM_BOARD_THERM
+#define REF_TEMP_VOL  1515		/* 30 Degree reference temperature voltage (mV) */
+#define REF_TEMP 300			/* reference temperature */
+#define HIGH_TEMP_LIM 1300		/* sensor operating high temp limit */
+#define DELTA_VOL 1177		/* -11.77mV/degree */
+#define R1 51			/* Voltage divider resistor 51k */
+#define R2 180			/* Voltage divider resistor 180k */
+
+int32_t qpnp_adc_scale_board_therm(struct qpnp_vadc_chip *chip,
+		int32_t adc_code,
+		const struct qpnp_adc_properties *adc_properties,
+		const struct qpnp_vadc_chan_properties *chan_properties,
+		struct qpnp_vadc_result *adc_chan_result)
+{
+	int64_t adc_voltage = 0;
+	int64_t vout_voltage =0;
+
+	adc_voltage = qpnp_adc_scale_ratiometric_calib(adc_code,
+			adc_properties, chan_properties);
+
+	vout_voltage = adc_voltage+adc_voltage*R1/R2;
+
+	adc_chan_result->physical = (REF_TEMP+((int32_t) ((REF_TEMP_VOL-vout_voltage)*
+					1000)/DELTA_VOL));
+
+	if(adc_chan_result->physical > HIGH_TEMP_LIM)
+	{
+		adc_chan_result->physical = REF_TEMP;
+		pr_err("board sensor operating range temperature exceeded\n");
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(qpnp_adc_scale_board_therm);
+#endif
 
 int32_t qpnp_adc_scale_default(struct qpnp_vadc_chip *vadc,
 		int32_t adc_code,

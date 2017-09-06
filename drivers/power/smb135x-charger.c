@@ -29,6 +29,9 @@
 #include <linux/regulator/machine.h>
 #include <linux/pinctrl/consumer.h>
 
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+#include <soc/qcom/lge/board_lge.h>
+#endif
 #define SMB135X_BITS_PER_REG	8
 
 /* Mask/Bit helpers */
@@ -66,6 +69,9 @@
 
 #define CFG_C_REG			0x0C
 #define USBIN_INPUT_MASK		SMB135X_MASK(4, 0)
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+#define USBIN_ADAPT_ALLOW		SMB135X_MASK(7,5)
+#endif
 #define USBIN_ADAPTER_ALLOWANCE_MASK	SMB135X_MASK(7, 5)
 #define ALLOW_5V_ONLY			0x00
 #define ALLOW_5V_OR_9V			0x20
@@ -80,6 +86,9 @@
 #define HVDCP_5_9_BIT			BIT(4)
 
 #define CFG_11_REG			0x11
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+#define APSD_DISABLE_BIT		BIT(0)
+#endif
 #define PRIORITY_BIT			BIT(7)
 #define AUTO_SRC_DET_EN_BIT			BIT(0)
 
@@ -95,7 +104,11 @@
 #define EN_CHG_INHIBIT_BIT		BIT(0)
 
 #define CFG_16_REG			0x16
+#ifdef CONFIG_LGE_PM
+#define SAFETY_TIME_EN_BIT		SMB135X_MASK(5,4)
+#else
 #define SAFETY_TIME_EN_BIT		BIT(5)
+#endif
 #define SAFETY_TIME_EN_SHIFT		5
 #define SAFETY_TIME_MINUTES_MASK	SMB135X_MASK(3, 2)
 #define SAFETY_TIME_MINUTES_SHIFT	2
@@ -255,6 +268,10 @@
 #define IRQ_G_REG			0x56
 #define IRQ_G_SRC_DETECT_BIT		BIT(6)
 
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+extern struct pseudo_batt_info_type pseudo_batt_info;
+extern int safety_timer;
+#endif
 enum {
 	WRKARND_USB100_BIT = BIT(0),
 	WRKARND_APSD_FAIL = BIT(1),
@@ -1032,6 +1049,9 @@ static int smb135x_path_suspend(struct smb135x_chg *chip, enum path_type path,
 	int *path_suspended;
 	int (*func)(struct smb135x_chg *chip, bool suspend);
 
+#ifdef CONFIG_LGE_PM
+	static int old_suspend_status = 0;
+#endif
 	mutex_lock(&chip->path_suspend_lock);
 	if (path == USB) {
 		suspended = chip->usb_suspended;
@@ -1048,10 +1068,22 @@ static int smb135x_path_suspend(struct smb135x_chg *chip, enum path_type path,
 	else
 		suspended |= reason;
 
+#ifdef CONFIG_LGE_PM
+	if (!suspend && !suspended) {
+		rc = func(chip, 0);
+		pr_info("-----ACTIVATED-----\n");
+	}
+	else if (suspend && !old_suspend_status) {
+		rc = func(chip, 1);
+		pr_info("-----SUSPENDED-----\n");
+	}
+	old_suspend_status = suspend;
+#else
 	if (*path_suspended && !suspended)
 		rc = func(chip, 0);
 	if (!(*path_suspended) && suspended)
 		rc = func(chip, 1);
+#endif
 
 	if (rc)
 		dev_err(chip->dev, "Couldn't set/unset suspend for %s path rc = %d\n",
@@ -1128,8 +1160,13 @@ static int smb135x_set_fastchg_current(struct smb135x_chg *chip,
 	rc = smb135x_masked_write(chip, CFG_1C_REG, FCC_MASK, reg);
 	if (rc < 0)
 		dev_err(chip->dev, "cannot write to config c rc = %d\n", rc);
+#ifdef CONFIG_LGE_PM
+	pr_info("fastchg current set to %dma\n",
+			chip->fastchg_current_table[i]);
+#else
 	pr_debug("fastchg current set to %dma\n",
 			chip->fastchg_current_table[i]);
+#endif
 	return rc;
 }
 
@@ -1190,7 +1227,11 @@ static int smb135x_set_usb_chg_current(struct smb135x_chg *chip,
 {
 	int rc;
 
+#ifdef CONFIG_LGE_PM
+	pr_info("USB current_ma = %d\n", current_ma);
+#else
 	pr_debug("USB current_ma = %d\n", current_ma);
+#endif
 
 	if (chip->workaround_flags & WRKARND_USB100_BIT) {
 		pr_info("USB requested = %dmA using %dmA\n", current_ma,
@@ -1227,6 +1268,8 @@ static int smb135x_set_usb_chg_current(struct smb135x_chg *chip,
 		chip->real_usb_psy_ma = CURRENT_150_MA;
 		goto out;
 	}
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+#else
 	if (current_ma == CURRENT_500_MA) {
 		rc = smb135x_masked_write(chip, CFG_5_REG, USB_2_3_BIT, 0);
 		rc |= smb135x_masked_write(chip, CMD_INPUT_LIMIT,
@@ -1244,7 +1287,7 @@ static int smb135x_set_usb_chg_current(struct smb135x_chg *chip,
 		chip->real_usb_psy_ma = CURRENT_900_MA;
 		goto out;
 	}
-
+#endif
 	rc = smb135x_set_high_usb_chg_current(chip, current_ma);
 	rc |= smb135x_path_suspend(chip, USB, CURRENT, false);
 out:
@@ -1332,8 +1375,13 @@ static int smb135x_charging_enable(struct smb135x_chg *chip, int enable)
 {
 	int rc;
 
+#ifdef CONFIG_LGE_PM
+	rc = smb135x_masked_write(chip, CMD_CHG_REG,
+				CMD_CHG_EN, enable ? 0 : CMD_CHG_EN);
+#else
 	rc = smb135x_masked_write(chip, CMD_CHG_REG,
 				CMD_CHG_EN, enable ? CMD_CHG_EN : 0);
+#endif
 	if (rc < 0) {
 		dev_err(chip->dev,
 			"Couldn't set CHG_ENABLE_BIT enable = %d rc = %d\n",
@@ -1481,6 +1529,22 @@ out:
 	return rc;
 }
 
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+static void smb135x_enable_safety_timer(struct smb135x_chg *chip, bool enable)
+{
+	int rc = 0;
+	rc = smb135x_masked_write(chip, CFG_16_REG,
+			SAFETY_TIME_EN_BIT, enable ? 0:SAFETY_TIME_EN_BIT);
+	if (rc < 0)
+	{
+		pr_err("failed to smb135x safety timer enable = %d\n", enable);
+		return;
+	}
+
+	pr_err("set smv135x safety timer enaebl = %d\n", enable);
+	return;
+}
+#endif
 static int smb135x_battery_set_property(struct power_supply *psy,
 				       enum power_supply_property prop,
 				       const union power_supply_propval *val)
@@ -1723,13 +1787,53 @@ static enum power_supply_property smb135x_parallel_properties[] = {
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+	POWER_SUPPLY_PROP_SAFETY_TIMER_ENABLE,
+#endif
 };
 
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+#define CFG_MISC_REG		(0x18)
+#define	MISC_VCHG_EN 		SMB135X_MASK(2,0)
+#define BATTERY_CHARGE_VCHG	BIT(3)
+static void smbchg_vchg_enable(struct smb135x_chg *chip)
+{
+	int rc = 0;
+	rc |= smb135x_masked_write(chip, CFG_5_REG, BATTERY_CHARGE_VCHG, 0);
+
+	rc |= smb135x_masked_write(chip, CFG_MISC_REG, MISC_VCHG_EN,	6);
+
+	if (rc < 0) {
+                dev_err(chip->dev, "Couldn't set vchg mode rc=%d\n", rc);
+                return ;
+        }
+}
+
+#define USBIN_AICL_REG		(0x0D)
+#define AICL_BIT_EN		BIT(2)
+static void smbchg_aicl_enable(struct smb135x_chg *chip, bool en)
+{
+	int rc = 0;
+
+	rc = smb135x_masked_write(chip, USBIN_AICL_REG, AICL_BIT_EN,
+		en ? AICL_BIT_EN : 0);
+	if (rc < 0) {
+                dev_err(chip->dev, "Couldn't set aicl rc=%d\n", rc);
+                return;
+        }
+}
+#define BATT_REG		(0x13)
+#define VBATT_LOW_MASK		SMB135X_MASK(3,0)
+#define VSYS_MIN_MASK		SMB135X_MASK(5,4)
+#endif
 static int smb135x_parallel_set_chg_present(struct smb135x_chg *chip,
 						int present)
 {
 	u8 val;
 	int rc;
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+	int i = 0, reg = 0;
+#endif
 
 	/* Check if SMB135x is present */
 	rc = smb135x_read(chip, VERSION1_REG, &val);
@@ -1780,12 +1884,20 @@ static int smb135x_parallel_set_chg_present(struct smb135x_chg *chip,
 			return rc;
 		}
 
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+		/* enable command mode, disable pin control mode and enable auto recharge */
+		rc = smb135x_masked_write(chip, CFG_14_REG,
+                                CHG_EN_BY_PIN_BIT | CHG_EN_ACTIVE_LOW_BIT
+                                | DISABLE_AUTO_RECHARGE_BIT,
+                               CHG_EN_ACTIVE_LOW_BIT);
+
+#else
 		/* set chg en by pin active low and enable auto recharge */
 		rc = smb135x_masked_write(chip, CFG_14_REG,
 				CHG_EN_BY_PIN_BIT | CHG_EN_ACTIVE_LOW_BIT
 				| DISABLE_AUTO_RECHARGE_BIT,
 				CHG_EN_BY_PIN_BIT | CHG_EN_ACTIVE_LOW_BIT);
-
+#endif
 		/* set bit 0 = 100mA bit 1 = 500mA and set register control */
 		rc = smb135x_masked_write(chip, CFG_E_REG,
 				POLARITY_100_500_BIT | USB_CTRL_BY_PIN_BIT,
@@ -1806,6 +1918,109 @@ static int smb135x_parallel_set_chg_present(struct smb135x_chg *chip,
 			return rc;
 		}
 
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+		/* Vsys_min 3.15V */
+		rc = smb135x_masked_write(chip, CFG_4_REG,
+					VSYS_MIN_MASK, 0);
+		if (rc < 0) {
+			dev_err(chip->dev,
+				"Couldn't set to Vsysmin. rc=%d\n", rc);
+			return rc;
+		}
+
+		/* disable Auto source detection */
+		rc = smb135x_masked_write(chip, CFG_11_REG,
+					APSD_DISABLE_BIT, 0);
+		if (rc < 0) {
+			dev_err(chip->dev,
+				"Couldn't disable APSD. rc=%d\n", rc);
+			return rc;
+		}
+
+		/* disable iterm */
+		rc = smb135x_masked_write(chip, CFG_14_REG,
+					DISABLE_CURRENT_TERM_BIT,
+					DISABLE_CURRENT_TERM_BIT);
+		if (rc) {
+			dev_err(chip->dev, "Couldn't set disable iterm rc = %d\n",
+								rc);
+			return rc;
+		}
+
+		/* disable jeita func */
+		rc = smb135x_write(chip, CFG_1A_REG, 0);
+		if (rc < 0) {
+			dev_err(chip->dev,
+				"Couldn't disable jeita func. rc=%d\n", rc);
+			return rc;
+		}
+		/* disable vbatt low threshold */
+		rc = smb135x_masked_write(chip, BATT_REG, VBATT_LOW_MASK, 0);
+		if (rc < 0) {
+			dev_err(chip->dev,
+				"Couldn't disable vbatt low. rc=%d\n", rc);
+			return rc;
+		}
+
+		/* enable smb charger vchg pin for current sensing */
+		smbchg_vchg_enable(chip);
+
+		/* disable AICL */
+		smbchg_aicl_enable(chip, false);
+
+		/* usbin adapter allowance : 5V ~ 9V */
+		rc = smb135x_masked_write(chip, CFG_C_REG,
+					USBIN_ADAPT_ALLOW, 0x40);
+		if (rc < 0) {
+			dev_err(chip->dev,
+				"cannot write to adapter allow rc = %d\n", rc);
+			return rc;
+		}
+
+		/* force using current from the register i.e. ignore APSD mA ratings */
+		rc = smb135x_masked_write(chip, CMD_INPUT_LIMIT,
+					USE_REGISTER_FOR_CURRENT,
+					USE_REGISTER_FOR_CURRENT);
+		if (rc < 0) {
+			dev_err(chip->dev,
+				"Couldn't set input limit cmd rc=%d\n", rc);
+			return rc;
+		}
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+		if (pseudo_batt_info.mode == 1 || !safety_timer) {
+			smb135x_enable_safety_timer(chip, false);
+		} else
+#endif
+		if (chip->safety_time != -EINVAL) {
+			if (chip->safety_time == 0) {
+				/* safety timer disabled */
+				rc = smb135x_masked_write(chip, CFG_16_REG,
+					SAFETY_TIME_EN_BIT, SAFETY_TIME_EN_BIT);
+				if (rc < 0) {
+					dev_err(chip->dev,
+					"Couldn't disable safety timer rc = %d\n", rc);
+					return rc;
+				}
+			} else {
+				for (i = 0; i < ARRAY_SIZE(chg_time); i++) {
+					if (chip->safety_time <= chg_time[i]) {
+						reg = i << SAFETY_TIME_MINUTES_SHIFT;
+						break;
+					}
+				}
+
+				rc = smb135x_masked_write(chip, CFG_16_REG,
+					SAFETY_TIME_EN_BIT | SAFETY_TIME_MINUTES_MASK,
+					reg);
+
+				if (rc < 0) {
+					dev_err(chip->dev,
+						"Couldn't set safety timer rc = %d\n", rc);
+					return rc;
+				}
+			}
+		}
+#endif
 		/* set the fastchg_current to the lowest setting */
 		if (chip->fastchg_current_arr_size > 0)
 			rc = smb135x_set_fastchg_current(chip,
@@ -1907,6 +2122,13 @@ static int smb135x_parallel_set_property(struct power_supply *psy,
 			chip->vfloat_mv = val->intval;
 		}
 		break;
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+	case POWER_SUPPLY_PROP_SAFETY_TIMER_ENABLE:
+		if (chip->parallel_charger_present) {
+			smb135x_enable_safety_timer(chip, val->intval);
+		}
+		break;
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -1963,6 +2185,11 @@ static int smb135x_parallel_get_property(struct power_supply *psy,
 		else
 			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		break;
+#ifdef CONFIG_LGE_PM_FACTORY_PSEUDO_BATTERY
+	case POWER_SUPPLY_PROP_SAFETY_TIMER_ENABLE:
+		val->intval = safety_timer;
+		break;
+#endif
 	default:
 		return -EINVAL;
 	}
@@ -2221,8 +2448,14 @@ static int smb135x_set_current_tables(struct smb135x_chg *chip)
 			= ARRAY_SIZE(usb_current_table_smb1357_smb1358);
 		chip->dc_current_table = dc_current_table;
 		chip->dc_current_arr_size = ARRAY_SIZE(dc_current_table);
+#ifdef CONFIG_LGE_PM
+		chip->fastchg_current_table = fastchg_current_table;
+		chip->fastchg_current_arr_size
+			= ARRAY_SIZE(fastchg_current_table);
+#else
 		chip->fastchg_current_table = NULL;
 		chip->fastchg_current_arr_size = 0;
+#endif
 		break;
 	case V_SMB1359:
 		chip->usb_current_table = usb_current_table_smb1359;
@@ -4272,6 +4505,13 @@ static int smb135x_parallel_charger_probe(struct i2c_client *client,
 						&chip->vfloat_mv);
 	if (rc < 0)
 		chip->vfloat_mv = -EINVAL;
+
+#ifdef CONFIG_LGE_PM_PARALLEL_CHARGING
+	rc = of_property_read_u32(node, "qcom,charging-timeout",
+						&chip->safety_time);
+	if (rc < 0)
+		chip->safety_time = -EINVAL;
+#endif
 
 	mutex_init(&chip->path_suspend_lock);
 	mutex_init(&chip->current_change_lock);

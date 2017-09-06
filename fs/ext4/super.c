@@ -331,8 +331,22 @@ static void __save_error_info(struct super_block *sb, const char *func,
 static void save_error_info(struct super_block *sb, const char *func,
 			    unsigned int line)
 {
+#ifdef CONFIG_MACH_LGE
+	struct ext4_super_block *es = EXT4_SB(sb)->s_es;
+#endif
+
 	__save_error_info(sb, func, line);
+
+#ifdef CONFIG_MACH_LGE
+	if (!strncmp(es->s_volume_name, "system", 6) &&
+			sb->s_flags & MS_RDONLY) {
+		printk("EXT4-fs error from Read only system partiton, so skip ext4_commit_super\n");
+	} else {
+		ext4_commit_super(sb, 1);
+	}
+#else
 	ext4_commit_super(sb, 1);
+#endif
 }
 
 /*
@@ -401,6 +415,15 @@ static void ext4_handle_error(struct super_block *sb)
 	if (test_opt(sb, ERRORS_RO)) {
 		ext4_msg(sb, KERN_CRIT, "Remounting filesystem read-only");
 		sb->s_flags |= MS_RDONLY;
+#ifdef CONFIG_MACH_LGE
+		/* LGE_CHANGE, 2015-10-26, HPLUS-BSP-FS@lge.com
+		 * put panic when ext4 partition(data partition) is remounted as Read Only
+		 */
+		if(!strcmp(EXT4_SB(sb)->s_es->s_volume_name,"data") &&
+				system_state != SYSTEM_RESTART &&
+				system_state != SYSTEM_POWER_OFF)
+			panic("EXT4-fs panic from previous error. remounted as RO. \n");
+#endif
 	}
 	if (test_opt(sb, ERRORS_PANIC))
 		panic("EXT4-fs (device %s): panic forced after error\n",
@@ -579,6 +602,15 @@ void __ext4_abort(struct super_block *sb, const char *function,
 		if (EXT4_SB(sb)->s_journal)
 			jbd2_journal_abort(EXT4_SB(sb)->s_journal, -EIO);
 		save_error_info(sb, function, line);
+	#ifdef CONFIG_MACH_LGE
+	/* put panic when ext4 partition is remounted as Read Only
+	*/
+	if(!strcmp(EXT4_SB(sb)->s_es->s_volume_name, "data") &&
+            system_state != SYSTEM_RESTART &&
+            system_state != SYSTEM_POWER_OFF)
+		panic("EXT4-fs panic from previous error. remounted as RO \n");
+	#endif
+
 	}
 	if (test_opt(sb, ERRORS_PANIC))
 		panic("EXT4-fs panic from previous error\n");
@@ -4065,6 +4097,12 @@ no_journal:
 cantfind_ext4:
 	if (!silent)
 		ext4_msg(sb, KERN_ERR, "VFS: Can't find ext4 filesystem");
+#ifdef CONFIG_MACH_LGE
+/*
+add return code if ext4 superblock is damaged
+*/
+    ret=-ESUPER;
+#endif
 	goto failed_mount;
 
 #ifdef CONFIG_QUOTA
@@ -4072,24 +4110,31 @@ failed_mount8:
 	kobject_del(&sbi->s_kobj);
 #endif
 failed_mount7:
+    printk(KERN_ERR "EXT4-fs: failed_mount7\n");
 	ext4_unregister_li_request(sb);
 failed_mount6:
+    printk(KERN_ERR "EXT4-fs: failed_mount6\n");
 	ext4_mb_release(sb);
 failed_mount5:
+    printk(KERN_ERR "EXT4-fs: failed_mount5\n");
 	ext4_ext_release(sb);
 	ext4_release_system_zone(sb);
 failed_mount4a:
+    printk(KERN_ERR "EXT4-fs: failed_mount4a\n");
 	dput(sb->s_root);
 	sb->s_root = NULL;
 failed_mount4:
+    printk(KERN_ERR "EXT4-fs: failed_mount4\n");
 	ext4_msg(sb, KERN_ERR, "mount failed");
 	destroy_workqueue(EXT4_SB(sb)->dio_unwritten_wq);
 failed_mount_wq:
+    printk(KERN_ERR "EXT4-fs: failed_mount_wq\n");
 	if (sbi->s_journal) {
 		jbd2_journal_destroy(sbi->s_journal);
 		sbi->s_journal = NULL;
 	}
 failed_mount3:
+    printk(KERN_ERR "EXT4-fs: failed_mount3\n");
 	ext4_es_unregister_shrinker(sb);
 	del_timer(&sbi->s_err_report);
 	if (sbi->s_flex_groups)
@@ -4102,10 +4147,15 @@ failed_mount3:
 	if (sbi->s_mmp_tsk)
 		kthread_stop(sbi->s_mmp_tsk);
 failed_mount2:
+    printk(KERN_ERR "EXT4-fs: failed_mount2\n");
+#ifdef CONFIG_MACH_LGE
+    ret=-ESUPER;
+#endif
 	for (i = 0; i < db_count; i++)
 		brelse(sbi->s_group_desc[i]);
 	ext4_kvfree(sbi->s_group_desc);
 failed_mount:
+    printk(KERN_ERR "EXT4-fs: failed_mount\n");
 	if (sbi->s_chksum_driver)
 		crypto_free_shash(sbi->s_chksum_driver);
 	if (sbi->s_proc) {

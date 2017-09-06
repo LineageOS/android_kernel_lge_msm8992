@@ -63,7 +63,6 @@ EXPORT_SYMBOL(iterate_dir);
  */
 
 #ifdef __ARCH_WANT_OLD_READDIR
-
 struct old_linux_dirent {
 	unsigned long	d_ino;
 	unsigned long	d_offset;

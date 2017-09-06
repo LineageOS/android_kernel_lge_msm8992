@@ -1449,7 +1449,13 @@ static void msm_isp_process_done_buf(struct vfe_device *vfe_dev,
 			vfe_dev->pdev->id, buf->buf_idx);
 		return;
 	} else if (rc == 0) {
+/*QCT_PATCH S, disable the vfe recovery when frame_id mismatch, 2015-07-14, freeso.kim@lge.com*/	
+#if 0	
 		if (buf->frame_id != frame_id) {
+#else
+		if ((buf->frame_id != frame_id) && vfe_dev->axi_data.enable_frameid_recovery) {
+#endif
+/*QCT_PATCH E, disable the vfe recovery when frame_id mismatch, 2015-07-14, freeso.kim@lge.com*/
 			struct msm_isp_event_data error_event;
 			struct msm_vfe_axi_halt_cmd halt_cmd;
 
@@ -2132,8 +2138,10 @@ static int msm_isp_stop_axi_stream(struct vfe_device *vfe_dev,
 				vfe_dev->hw_info->vfe_ops.core_ops.reg_update(
 					vfe_dev,
 					SRC_TO_INTF(stream_info->stream_src));
+				mutex_unlock(&vfe_dev->core_mutex);    /*LGE_CHANGE, add QCT_PATCH about stability after Post CS , 2015-03-31, yousung.kang@lge.com */
 				rc = msm_isp_axi_wait_for_cfg_done(vfe_dev,
 					camif_update, src_mask, 1);
+				mutex_lock(&vfe_dev->core_mutex);     /*LGE_CHANGE, add QCT_PATCH about stability after Post CS , 2015-03-31, yousung.kang@lge.com */
 				if (rc < 0)
 					pr_err("cfg done failed\n");
 				rc = -EBUSY;

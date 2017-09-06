@@ -35,6 +35,10 @@
 #define SEEK_HOLE	4	/* seek to the next hole */
 #define SEEK_MAX	SEEK_HOLE
 
+#ifdef CONFIG_SDCARD_FS
+#define RENAME_NOPROPAGATE	(1 << 3)	/* Don't Propagate*/
+#endif
+
 struct fstrim_range {
 	__u64 start;
 	__u64 len;

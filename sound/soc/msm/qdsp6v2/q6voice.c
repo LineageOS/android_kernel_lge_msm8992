@@ -98,6 +98,29 @@ static int remap_cal_data(struct cal_block_data *cal_block,
 static int voice_unmap_cal_memory(int32_t cal_type,
 				  struct cal_block_data *cal_block);
 
+//[AUDIO_BSP_START]minyoung1.kim@lge.com
+static uint32_t audio_start = 0;
+//static String audio_start = "/sys/module/q6voice/parameters/audio_start";
+static int set_start_call(const char *buf, struct kernel_param *kp)
+{
+	audio_start = buf[0] - '0';
+	pr_info("%s: LG audio bsp: set  %d \n", __func__, audio_start);
+
+	return 1;
+}
+
+static int get_start_call(char *buf, struct kernel_param *kp)
+{
+	int ret = 0;
+
+	ret = sprintf(buf, "%d\n", audio_start);
+	pr_info("%s:LG audio bsp: get  %d \n", __func__, audio_start);
+
+	return ret;
+}
+module_param_call(audio_start,set_start_call, get_start_call, NULL, 0664);
+//[AUDIO_BSP_END]minyoung1.kim@lge.com
+
 static void voice_itr_init(struct voice_session_itr *itr,
 			   u32 session_id)
 {
@@ -5180,6 +5203,10 @@ int voc_end_voice_call(uint32_t session_id)
 {
 	struct voice_data *v = voice_get_session(session_id);
 	int ret = 0;
+  //[AUDIO_BSP_START]minyoung1.kim@lge.com
+	char temp_buf[2] = "0";
+	set_start_call(temp_buf,NULL);
+  //[AUDIO_BSP_END]minyoung1.kim@lge.com
 
 	if (v == NULL) {
 		pr_err("%s: invalid session_id 0x%x\n", __func__, session_id);
@@ -5447,6 +5474,7 @@ int voc_start_voice_call(uint32_t session_id)
 {
 	struct voice_data *v = voice_get_session(session_id);
 	int ret = 0;
+	char temp_buf[2] = "1";  //[AUDIO_BSP_START]minyoung1.kim@lge.com
 
 	if (v == NULL) {
 		pr_err("%s: invalid session_id 0x%x\n", __func__, session_id);
@@ -5504,6 +5532,12 @@ int voc_start_voice_call(uint32_t session_id)
 			goto fail;
 		}
 		ret = voice_setup_vocproc(v);
+		//[AUDIO_BSP_START]minyoung1.kim@lge.com
+		if(ret == 0){
+			set_start_call(temp_buf,NULL);
+			pr_info("LG audio bsp - stated voice call \n");
+		}
+		//[AUDIO_BSP_END]minyoung1.kim@lge.com
 		if (ret < 0) {
 			pr_err("setup voice failed\n");
 			goto fail;
@@ -5601,7 +5635,9 @@ static int32_t qdsp_mvm_callback(struct apr_client_data *data, void *priv)
 	struct voice_data *v = NULL;
 	int i = 0;
 	struct vss_iversion_rsp_get_t *version_rsp = NULL;
-
+#ifdef CONFIG_SND_LGE_VOC_CONF
+	struct lge_voc_conf_t lge_voc_conf;
+#endif
 	if ((data == NULL) || (priv == NULL)) {
 		pr_err("%s: data or priv is NULL\n", __func__);
 		return -EINVAL;
@@ -5788,6 +5824,19 @@ static int32_t qdsp_mvm_callback(struct apr_client_data *data, void *priv)
 			wake_up(&v->mvm_wait);
 		}
 	}
+#ifdef CONFIG_SND_LGE_VOC_CONF
+	else if(data->opcode == LGE_VOC_CONF_RSP) {
+		pr_debug("%s: Received LGE_VOC_CONF_RSP\n", __func__);
+		if(data->payload_size)
+		{
+			ptr = data->payload;
+			lge_voc_conf.network_id = ptr[0];
+			lge_voc_conf.rx_pp_sr = ptr[1];
+			lge_voc_conf.tx_pp_sr = ptr[2];
+			pr_info("%s: calibration network_id = 0x%x, rx_pp_sr = %d, tx_pp_sr = %d\n", __func__,lge_voc_conf.network_id,lge_voc_conf.rx_pp_sr,lge_voc_conf.tx_pp_sr);
+		}
+	}
+#endif
 	return 0;
 }
 

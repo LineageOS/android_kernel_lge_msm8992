@@ -357,11 +357,13 @@ static bool rt6_check_expired(const struct rt6_info *rt)
 	return false;
 }
 
+#ifndef CONFIG_LGP_DATA_TCPIP_MPTCP
 static bool rt6_need_strict(const struct in6_addr *daddr)
 {
 	return ipv6_addr_type(daddr) &
 		(IPV6_ADDR_MULTICAST | IPV6_ADDR_LINKLOCAL | IPV6_ADDR_LOOPBACK);
 }
+#endif
 
 /* Multipath route selection:
  *   Hash based function using packet header and flowlabel.
@@ -2551,6 +2553,15 @@ static int rt6_fill_node(struct net *net,
 		if (nla_put(skb, RTA_PREFSRC, 16, &saddr_buf))
 			goto nla_put_failure;
 	}
+
+  /* 2014-11-21, hani.park@lge.com LGP_DATA_QC_CR [START] */
+  //G3L netlink kernel crash in case of WiFi on/off repeat
+  if (unlikely((unsigned long)dst_metrics_ptr(&rt->dst) < 2)) {
+      WARN(1, "Got null _metrics from rt->dst");
+      printk(KERN_DEBUG "Got null _metrics from rt->dst \n");
+      goto nla_put_failure;
+  }
+  /* 2014-11-21, hani.park@lge.com LGP_DATA_QC_CR [END] */
 
 	if (rtnetlink_put_metrics(skb, dst_metrics_ptr(&rt->dst)) < 0)
 		goto nla_put_failure;

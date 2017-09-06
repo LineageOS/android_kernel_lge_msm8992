@@ -430,7 +430,8 @@ void msm_jpeg_hw_reset_dma(void *base, int size)
 	return;
 }
 
-uint32_t msm_jpeg_hw_read(struct msm_jpeg_hw_cmd *hw_cmd_p,
+/* LGE_CHANGE, camera stability task, Changed to inline function for RTB logging */
+inline uint32_t msm_jpeg_hw_read(struct msm_jpeg_hw_cmd *hw_cmd_p,
 	 void *jpeg_region_base)
 {
 	uint32_t *paddr;
@@ -443,8 +444,8 @@ uint32_t msm_jpeg_hw_read(struct msm_jpeg_hw_cmd *hw_cmd_p,
 
 	return data;
 }
-
-void msm_jpeg_hw_write(struct msm_jpeg_hw_cmd *hw_cmd_p,
+/* LGE_CHANGE, camera stability task, Changed to inline function for RTB logging */
+inline void msm_jpeg_hw_write(struct msm_jpeg_hw_cmd *hw_cmd_p,
 	void *jpeg_region_base)
 {
 	uint32_t *paddr;
@@ -501,7 +502,7 @@ int msm_jpeg_hw_exec_cmds(struct msm_jpeg_hw_cmd *hw_cmd_p, uint32_t m_cmds,
 	uint32_t data;
 
 	while (m_cmds--) {
-		if (hw_cmd_p->offset > max_size) {
+		if (hw_cmd_p->offset >= max_size) {
 			JPEG_PR_ERR("%s:%d] %d exceed hw region %d\n", __func__,
 				__LINE__, hw_cmd_p->offset, max_size);
 			return -EFAULT;

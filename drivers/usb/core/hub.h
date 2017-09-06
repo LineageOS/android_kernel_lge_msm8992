@@ -123,3 +123,6 @@ static inline int hub_port_debounce_be_stable(struct usb_hub *hub,
 	return hub_port_debounce(hub, port1, false);
 }
 
+#if defined(CONFIG_LGE_TOUCH_CORE)
+extern void touch_notify_connect(u32 type);
+#endif

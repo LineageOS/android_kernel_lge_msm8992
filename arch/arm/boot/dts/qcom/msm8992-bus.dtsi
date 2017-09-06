@@ -1468,7 +1468,8 @@
 		};
 	};
 
-	static-rules {
+//LGE_CHANGE_S, Increased camera power issue fix after migration at 8/18, 151118, changhwan.kang@lge.com
+/*	static-rules {
 		compatible = "qcom,msm-bus-static-bw-rules";
 
 		rule0 {
@@ -1499,7 +1500,8 @@
 			qcom,mode = <THROTTLE_OFF>;
 			qcom,dest-node = <&mas_apps_proc>;
 		};
-	};
+	};*/
+//LGE_CHANGE_E, Increased camera power issue fix after migration at 8/18, 151118, changhwan.kang@lge.com
 
 	devfreq_spdm_cpu {
 		compatible = "qcom,devfreq_spdm";

@@ -12,6 +12,7 @@
 #ifndef __WCD9XXX_MBHC_H__
 #define __WCD9XXX_MBHC_H__
 
+#include <linux/switch.h>
 #include "wcd9xxx-resmgr.h"
 #include "wcdcal-hwdep.h"
 
@@ -276,6 +277,12 @@ struct wcd9xxx_mbhc_config {
 	bool enable_anc_mic_detect;
 	enum hw_jack_type hw_jack_type;
 	int key_code[8];
+#ifdef CONFIG_SND_EAR_MIC_SWITCH
+    int hph_aud_sw;
+#endif
+#ifdef CONFIG_SND_SOC_HPH_WA
+	int mbhc_det_gpio;
+#endif
 };
 
 struct wcd9xxx_cfilt_mode {
@@ -328,6 +335,10 @@ struct wcd9xxx_mbhc {
 	bool polling_active;
 	/* Delayed work to report long button press */
 	struct delayed_work mbhc_btn_dwork;
+#ifdef CONFIG_MACH_LGE //miss_4pole_detected
+	struct delayed_work miss_4pole_detected_dwork;
+	bool miss_4pole_detected;
+#endif //miss_4pole_detected
 	int buttons_pressed;
 	enum wcd9xxx_mbhc_state mbhc_state;
 	struct wcd9xxx_mbhc_config *mbhc_cfg;
@@ -340,6 +351,13 @@ struct wcd9xxx_mbhc {
 
 	bool mbhc_micbias_switched;
 
+#if defined(CONFIG_SND_LGE_HIDDEN_AUX)
+	bool mbhc_aux_extend_status;
+#endif
+#ifdef CONFIG_SND_SOC_HPH_WA
+	u32 mbhc_advanced_status;
+#endif
+
 	u32 hph_status; /* track headhpone status */
 	u8 hphlocp_cnt; /* headphone left ocp retry */
 	u8 hphrocp_cnt; /* headphone right ocp retry */
@@ -350,7 +368,9 @@ struct wcd9xxx_mbhc {
 	struct firmware_cal *mbhc_cal;
 
 	struct delayed_work mbhc_insert_dwork;
-
+#ifdef CONFIG_MACH_LGE
+	struct delayed_work mbhc_detect_for_boot;
+#endif
 	u8 current_plug;
 	struct work_struct correct_plug_swch;
 	/*
@@ -414,6 +434,10 @@ struct wcd9xxx_mbhc {
 #endif
 
 	struct mutex mbhc_lock;
+	struct mutex hphl_lock;
+	struct mutex hphr_lock;
+
+	struct switch_dev sdev;
 };
 
 #define WCD9XXX_MBHC_CAL_SIZE(buttons, rload) ( \

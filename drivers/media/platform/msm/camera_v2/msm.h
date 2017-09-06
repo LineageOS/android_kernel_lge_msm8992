@@ -30,6 +30,16 @@
 #include <media/videobuf2-msm-mem.h>
 #include <media/msmb_camera.h>
 
+/* LGE_CHANGE_S, camera stability task, added  msm-config debugfs*/
+#include <linux/debugfs.h>
+#define LGE_DEBUG_DISABLE_TIMEOUT	1
+#define LGE_DEBUG_PANIC_ON_TIMEOUT	2
+#define LGE_DEBUG_BLOCK_POST_EVENT	7
+#define BIT_SET( x, idx )    ( x |= 1<<(idx&7))
+#define BIT_ISSET( x, idx )  ( x & (1<<(idx&7)))
+#define BIT_CLR( x, idx )    ( x &= ~(1<<(idx&7)))
+/* LGE_CHANGE_E, camera stability task, added  msm-config debugfs*/
+
 #define MSM_POST_EVT_TIMEOUT 5000
 #define MSM_POST_EVT_NOTIMEOUT 0xFFFFFFFF
 #define MSM_CAMERA_STREAM_CNT_BITS  32
@@ -117,4 +127,7 @@ struct vb2_queue *msm_get_stream_vb2q(unsigned int session_id,
 	unsigned int stream_id);
 struct msm_stream *msm_get_stream_from_vb2q(struct vb2_queue *q);
 struct msm_session *msm_session_find(unsigned int session_id);
+#if 0//defined(CONFIG_MSM_OTP)
+struct v4l2_subdev *msm_subdev_find(const char *name);
+#endif
 #endif /*_MSM_H */

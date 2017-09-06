@@ -22,17 +22,24 @@
 #include "mdss_mdp.h"
 #include "mdss_debug.h"
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+#include "lge/panel/oem_mdss_dsi_common.h"
+extern unsigned int reg_dump_enable;
+#endif
+
 #ifdef CONFIG_FB_MSM_MDSS_XLOG_DEBUG
 #define XLOG_DEFAULT_ENABLE 1
 #else
 #define XLOG_DEFAULT_ENABLE 0
 #endif
 
+#if !IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
 #define XLOG_DEFAULT_PANIC 1
+#endif
 #define XLOG_DEFAULT_REGDUMP 0x2 /* dump in RAM */
 #define XLOG_DEFAULT_DBGBUSDUMP 0x3 /* dump in LOG & RAM */
 
-#define MDSS_XLOG_ENTRY	256
+#define MDSS_XLOG_ENTRY        256
 #define MDSS_XLOG_MAX_DATA 6
 #define MDSS_XLOG_BUF_MAX 512
 #define MDSS_XLOG_BUF_ALIGN 32
@@ -47,6 +54,7 @@ struct tlog {
 	u32 data_cnt;
 	int pid;
 };
+
 
 struct mdss_dbg_xlog {
 	struct tlog logs[MDSS_XLOG_ENTRY];
@@ -63,6 +71,7 @@ struct mdss_dbg_xlog {
 	bool work_dbgbus;
 	u32 *dbgbus_dump; /* address for the debug bus dump */
 } mdss_dbg_xlog;
+
 
 static inline bool mdss_xlog_is_enabled(u32 flag)
 {
@@ -389,7 +398,7 @@ static void mdss_dump_reg_by_blk(const char *blk_name)
 		}
 	}
 }
-
+#if 0 /* P1 Display - temporaty blocked */
 static void mdss_dump_reg_all(void)
 {
 	struct mdss_data_type *mdata = mdss_mdp_get_mdata();
@@ -404,7 +413,7 @@ static void mdss_dump_reg_all(void)
 			mdss_dump_reg_by_blk(blk_base->name);
 	}
 }
-
+#endif
 static void clear_dump_blk_arr(struct mdss_debug_base *blk_arr[],
 	u32 blk_len)
 {
@@ -474,6 +483,14 @@ void mdss_xlog_tout_handler_default(bool enforce_dump, bool queue,
 	struct mdss_debug_base *blk_base = NULL;
 	struct mdss_debug_base **blk_arr;
 	u32 blk_len;
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	int rc;
+	if (lge_mdss_dsi.lge_mdss_xlog_tout_handler_default)
+		rc=lge_mdss_dsi.lge_mdss_xlog_tout_handler_default();
+	if(rc)
+		return;
+#endif
 
 	if (!mdss_xlog_is_enabled(MDSS_XLOG_DEFAULT) && !enforce_dump)
 		return;
@@ -557,13 +574,14 @@ static ssize_t mdss_xlog_dump_read(struct file *file, char __user *buff,
 static ssize_t mdss_xlog_dump_write(struct file *file,
 	const char __user *user_buf, size_t count, loff_t *ppos)
 {
+#if 0 /* P1 Display - temporaty blocked */
 	mdss_dump_reg_all();
 
 	mdss_xlog_dump_all();
 
 	if (mdss_dbg_xlog.panic_on_err)
 		panic("mdss");
-
+#endif
 	return count;
 }
 
@@ -576,6 +594,9 @@ static const struct file_operations mdss_xlog_fops = {
 
 int mdss_create_xlog_debug(struct mdss_debug_data *mdd)
 {
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	int rc;
+#endif
 	mdss_dbg_xlog.xlog = debugfs_create_dir("xlog", mdd->root);
 	if (IS_ERR_OR_NULL(mdss_dbg_xlog.xlog)) {
 		pr_err("debugfs_create_dir fail, error %ld\n",
@@ -595,12 +616,19 @@ int mdss_create_xlog_debug(struct mdss_debug_data *mdd)
 			    &mdss_dbg_xlog.panic_on_err);
 	debugfs_create_u32("reg_dump", 0644, mdss_dbg_xlog.xlog,
 			    &mdss_dbg_xlog.enable_reg_dump);
-	debugfs_create_u32("dbgbus_dump", 0644, mdss_dbg_xlog.xlog,
-			    &mdss_dbg_xlog.enable_dbgbus_dump);
+        debugfs_create_u32("dbgbus_dump", 0644, mdss_dbg_xlog.xlog,
+                            &mdss_dbg_xlog.enable_dbgbus_dump);
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_mdss_create_xlog_debug)
+		rc=lge_mdss_dsi.lge_mdss_create_xlog_debug(mdd);
+	debugfs_create_bool("reg_dump_enable", 0644, mdss_dbg_xlog.xlog,
+			&reg_dump_enable);
+	reg_dump_enable = XLOG_DEFAULT_REGDUMP_ENABLE;
+#endif
 	mdss_dbg_xlog.xlog_enable = XLOG_DEFAULT_ENABLE;
 	mdss_dbg_xlog.panic_on_err = XLOG_DEFAULT_PANIC;
-	mdss_dbg_xlog.enable_reg_dump = XLOG_DEFAULT_REGDUMP;
+	mdss_dbg_xlog.enable_reg_dump = 0x1;
 	mdss_dbg_xlog.enable_dbgbus_dump = XLOG_DEFAULT_DBGBUSDUMP;
 
 	pr_info("xlog_status: enable:%d, panic:%d, dump:%d\n",

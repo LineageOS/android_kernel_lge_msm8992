@@ -16,6 +16,12 @@
 #include <linux/delay.h>
 #include <linux/mdss_io_util.h>
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+#include <soc/qcom/lge/board_lge.h>
+#define LGD_SIC_INCELL_CMD_PANEL 3
+#define PANEL_SEQUENCE(name, state) do { pr_debug("[PanelSequence][%s] %d\n", name, state); } while (0)
+#endif
+
 #define MAX_I2C_CMDS  16
 void dss_reg_w(struct dss_io_data *io, u32 offset, u32 value, u32 debug)
 {
@@ -214,6 +220,14 @@ int msm_dss_enable_vreg(struct dss_vreg *in_vreg, int num_vreg, int enable)
 	bool need_sleep;
 	if (enable) {
 		for (i = 0; i < num_vreg; i++) {
+#if defined(CONFIG_MACH_MSM8992_P1_CN) || defined(CONFIG_MACH_MSM8992_P1_GLOBAL_COM) || defined(CONFIG_MACH_MSM8992_SJR_GLOBAL_COM)
+			if (lge_get_panel() != LGD_SIC_INCELL_CMD_PANEL) {
+				if(!strcmp(in_vreg[i].vreg_name, "vdd_l19")) {
+					pr_info("%s :If Global & CN doesn't use sic, doesn't register ldo19\n", __func__);
+					continue;
+				}
+			}
+#endif
 			rc = PTR_RET(in_vreg[i].vreg);
 			if (rc) {
 				DEV_ERR("%pS->%s: %s regulator error. rc=%d\n",
@@ -233,6 +247,9 @@ int msm_dss_enable_vreg(struct dss_vreg *in_vreg, int num_vreg, int enable)
 				goto vreg_set_opt_mode_fail;
 			}
 			rc = regulator_enable(in_vreg[i].vreg);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+			PANEL_SEQUENCE(in_vreg[i].vreg_name, 1);
+#endif
 			if (in_vreg[i].post_on_sleep && need_sleep)
 				msleep(in_vreg[i].post_on_sleep);
 			if (rc < 0) {
@@ -250,6 +267,9 @@ int msm_dss_enable_vreg(struct dss_vreg *in_vreg, int num_vreg, int enable)
 				regulator_set_optimum_mode(in_vreg[i].vreg,
 					in_vreg[i].disable_load);
 				regulator_disable(in_vreg[i].vreg);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+				PANEL_SEQUENCE(in_vreg[i].vreg_name, 0);
+#endif
 				if (in_vreg[i].post_off_sleep)
 					msleep(in_vreg[i].post_off_sleep);
 			}

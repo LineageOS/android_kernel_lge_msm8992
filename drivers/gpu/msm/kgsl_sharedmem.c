@@ -329,6 +329,9 @@ static int kgsl_page_alloc_vmfault(struct kgsl_memdesc *memdesc,
 				struct vm_fault *vmf)
 {
 	int pgoff;
+#if 0 //CONFIG_LGE_KGSL_OFFSET_SEARCH
+	struct scatterlist *s = memdesc->sg;
+#endif
 	unsigned int offset;
 
 	offset = ((unsigned long) vmf->virtual_address - vma->vm_start);
@@ -337,7 +340,58 @@ static int kgsl_page_alloc_vmfault(struct kgsl_memdesc *memdesc,
 		return VM_FAULT_SIGBUS;
 
 	pgoff = offset >> PAGE_SHIFT;
+#if 0//def CONFIG_LGE_KGSL_OFFSET_SEARCH /* should be check later for applied : del for nos es1 migration*/
+	if (memdesc->offseted_sg == 0x0FF5E7ED) {
+#define SCALED_FACTOR   (_get_page_size / PAGE_SIZE)
 
+		struct page *page;
+		int sg_offset, sg_offset_4k;
+		int _pgoff;
+		int _get_page_size=SZ_64K;//get_page_size(SZ_4M, ilog2(SZ_4M));
+/*
+	1)	16n + m = memdesc->size >> PAGE_SHIFT
+	2)	n + m = memdesc->s_len
+	----
+	from 2)	m = memdesc->sg_len - n
+	from 1)	16n + (memdesc->sg_len - n) = memdesc->size >> PAGE_SHIFT
+
+	result	n = ((memdesc->size >> PAGE_SHIFT) - memdesc->sg_len ) / 15
+*/
+		sg_offset_4k = ((memdesc->size >> PAGE_SHIFT) - memdesc->sglen)
+			/ (SCALED_FACTOR - 1);
+
+		_pgoff = pgoff - sg_offset_4k * SCALED_FACTOR;
+
+		if (_pgoff < 0) { // 64K allocated offset
+			sg_offset = pgoff / SCALED_FACTOR;
+			pgoff -= sg_offset * SCALED_FACTOR;
+			sg_offset_4k=0;
+		} else {
+			s = &s[sg_offset_4k];
+			sg_offset = _pgoff;
+			pgoff = 0;
+		}
+
+		if (sg_offset + sg_offset_4k > memdesc->sglen) {
+			KGSL_CORE_ERR("Sg offset over %d %d %d\n",
+					(int)memdesc->size, sg_offset,
+					memdesc->sglen);
+
+			pgoff = offset >> PAGE_SHIFT;
+			s = memdesc->sg;
+			goto orginal_code;
+		}
+
+		page = sg_page(&s[sg_offset]);
+		page = nth_page(page, pgoff);
+
+		get_page(page);
+		vmf->page = page;
+
+		return 0;
+	}
+orginal_code:
+#endif
 	if (pgoff < memdesc->page_count) {
 		struct page *page = memdesc->pages[pgoff];
 
@@ -627,6 +681,10 @@ _kgsl_sharedmem_page_alloc(struct kgsl_memdesc *memdesc,
 
 
 	len = size;
+
+#if 0 //def CONFIG_LGE_KGSL_OFFSET_SEARCH /* should be check later for applied : del for nos es1 migration*/
+	memdesc->offseted_sg = 0x0FF5E7ED;
+#endif
 
 	while (len > 0) {
 		struct page *page;

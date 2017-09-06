@@ -25,9 +25,36 @@
 
 #include "mdss_dsi.h"
 
+#if IS_ENABLED(CONFIG_LGE_READER_MODE)
+#include "lge/panel/reader_mode.h"
+#endif
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+#include "lge/panel/oem_mdss_dsi_common.h"
+#endif
+
+#ifdef CONFIG_MACH_LGE
+#include <soc/qcom/lge/board_lge.h>
+#endif
+
+#if defined (CONFIG_LGE_DISPLAY_TUNING) || defined(CONFIG_LGE_DISPLAY_DUAL_BACKLIGHT)
+struct mdss_panel_data *pdata_base;
+#endif
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+extern int lge_lg4945_panel_mode_cmd_send(int switch_cmd, struct mdss_dsi_ctrl_pdata *ctrl);
+#endif
+
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+extern void qpnp_wled_dimming(int dst_lvl);
+#endif
+
 #define DT_CMD_HDR 6
 #define MIN_REFRESH_RATE 30
 #define DEFAULT_MDP_TRANSFER_TIME 14000
+
+extern int mdss_dsi_cmdlist_rx(struct mdss_dsi_ctrl_pdata *ctrl,
+				struct dcs_cmd_req *req);
 
 DEFINE_LED_TRIGGER(bl_led_trigger);
 
@@ -43,8 +70,11 @@ void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 	}
 	ctrl->pwm_enabled = 0;
 }
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE) || IS_ENABLED(CONFIG_LGE_DISPLAY_DUAL_BACKLIGHT)
+void mdss_dsi_panel_bklt_pwm(struct mdss_dsi_ctrl_pdata *ctrl, int level)
+#else
 static void mdss_dsi_panel_bklt_pwm(struct mdss_dsi_ctrl_pdata *ctrl, int level)
+#endif
 {
 	int ret;
 	u32 duty;
@@ -123,7 +153,6 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 		if (ctrl->ndx != DSI_CTRL_LEFT)
 			return -EINVAL;
 	}
-
 	dcs_cmd[0] = cmd0;
 	dcs_cmd[1] = cmd1;
 	memset(&cmdreq, 0, sizeof(cmdreq));
@@ -140,9 +169,13 @@ u32 mdss_dsi_panel_cmd_read(struct mdss_dsi_ctrl_pdata *ctrl, char cmd0,
 
 	return 0;
 }
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE) || IS_ENABLED(CONFIG_LGE_READER_MODE)
+void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
+			struct dsi_panel_cmds *pcmds, u32 flags)
+#else
 static void mdss_dsi_panel_cmds_send(struct mdss_dsi_ctrl_pdata *ctrl,
 			struct dsi_panel_cmds *pcmds, u32 flags)
+#endif
 {
 	struct dcs_cmd_req cmdreq;
 	struct mdss_panel_info *pinfo;
@@ -253,6 +286,11 @@ disp_en_gpio_err:
 
 int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 {
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_mdss_dsi_panel_reset)
+		return lge_mdss_dsi.lge_mdss_dsi_panel_reset(pdata, enable);
+	else {
+#endif
 	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
 	struct mdss_panel_info *pinfo = NULL;
 	int i, rc = 0;
@@ -276,7 +314,8 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 		return rc;
 	}
 
-	pr_debug("%s: enable = %d\n", __func__, enable);
+	pr_info("%s: enable = %d, ndx = %d\n", __func__,
+			enable, ctrl_pdata->ndx);
 	pinfo = &(ctrl_pdata->panel_data.panel_info);
 
 	if (enable) {
@@ -288,14 +327,13 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 		if (!pinfo->cont_splash_enabled) {
 			if (gpio_is_valid(ctrl_pdata->disp_en_gpio))
 				gpio_set_value((ctrl_pdata->disp_en_gpio), 1);
-
+/* reset pin is always on */
 			for (i = 0; i < pdata->panel_info.rst_seq_len; ++i) {
 				gpio_set_value((ctrl_pdata->rst_gpio),
-					pdata->panel_info.rst_seq[i]);
+						pdata->panel_info.rst_seq[i]);
 				if (pdata->panel_info.rst_seq[++i])
 					usleep(pinfo->rst_seq[i] * 1000);
 			}
-
 			if (gpio_is_valid(ctrl_pdata->bklt_en_gpio))
 				gpio_set_value((ctrl_pdata->bklt_en_gpio), 1);
 		}
@@ -327,6 +365,9 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 			gpio_free(ctrl_pdata->mode_gpio);
 	}
 	return rc;
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	}
+#endif
 }
 
 /**
@@ -410,6 +451,11 @@ static void mdss_dsi_send_col_page_addr(struct mdss_dsi_ctrl_pdata *ctrl,
 
 	cmdreq.cmds = set_col_page_addr_cmd;
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+
+#ifdef CONFIG_LGE_PARTIAL_UPDATE
+	pr_debug("%s: [ %d %d %d %d ]\n", __func__,
+			roi->x, roi->y, roi->w, roi->h);
+#endif
 }
 
 static int mdss_dsi_set_col_page_addr(struct mdss_panel_data *pdata,
@@ -451,6 +497,11 @@ static int mdss_dsi_set_col_page_addr(struct mdss_panel_data *pdata,
 		roi = *p_roi;
 	}
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+	if(pdata->panel_info.lge_pan_info.skip_border_fill == 1 &&
+		pdata->panel_info.lge_pan_info.cur_panel_mode == LGE_PANEL_MODE_U2)
+		force_send = true;
+#endif
 	/* roi had changed, do col_page update */
 	if (force_send || !mdss_rect_cmp(c_roi, &roi)) {
 		pr_debug("%s: ndx=%d x=%d y=%d w=%d h=%d\n",
@@ -519,10 +570,13 @@ static int mdss_dsi_set_col_page_addr(struct mdss_panel_data *pdata,
 		}
 	}
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+	if(force_send == true)
+		force_send = false;
+#endif
 end:
 	return 0;
 }
-
 static void mdss_dsi_panel_switch_mode(struct mdss_panel_data *pdata,
 							int mode)
 {
@@ -579,10 +633,12 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		pr_err("%s: Invalid input data\n", __func__);
 		return;
 	}
+#if defined (CONFIG_LGE_DISPLAY_TUNING) || defined(CONFIG_LGE_DISPLAY_DUAL_BACKLIGHT)
+	pdata_base = pdata;
+#endif
 
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
-
 	/*
 	 * Some backlight controllers specify a minimum duty cycle
 	 * for the backlight brightness. If the brightness is less
@@ -592,6 +648,11 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	if ((bl_level < pdata->panel_info.bl_min) && (bl_level != 0))
 		bl_level = pdata->panel_info.bl_min;
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_mdss_dsi_panel_bl_ctrl) {
+		lge_mdss_dsi.lge_mdss_dsi_panel_bl_ctrl(pdata, bl_level);
+	} else {
+#endif
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
 		led_trigger_event(bl_led_trigger, bl_level);
@@ -628,13 +689,24 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 			__func__);
 		break;
 	}
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	}
+#endif
 }
+
+#if defined(CONFIG_LGE_PP_AD_SUPPORTED)
+void mdss_dsi_panel_dimming_ctrl(int bl_level)
+{
+       qpnp_wled_dimming(bl_level);
+}
+#endif
 
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 {
 	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
 	struct mdss_panel_info *pinfo;
 	struct dsi_panel_cmds *on_cmds;
+	struct dsi_panel_cmds *rsp_nvm_write;
 
 	if (pdata == NULL) {
 		pr_err("%s: Invalid input data\n", __func__);
@@ -652,18 +724,45 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 			goto end;
 	}
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+	if (pinfo->lge_pan_info.lge_panel_send_on_cmd == false) {
+		pr_info("%s: skip panel  on cmd, ctrl=%p ndx=%d\n", __func__, ctrl, ctrl->ndx);
+		goto end;
+	}
+#endif
+
+#if defined(CONFIG_LGE_MIPI_P1_INCELL_QHD_CMD_PANEL)
+	if (pinfo->lge_pan_info.panel_type == LGD_INCELL_CMD_PANEL) {
+		rsp_nvm_write = &ctrl->lge_pan_data->rsp_nvm_write;
+
+		if ((rsp_nvm_write->cmd_cnt) && (ctrl->lge_pan_data->do_rsp_nvm_write == true)) {
+			mdss_dsi_panel_cmds_send(ctrl, rsp_nvm_write, CMD_REQ_COMMIT);
+			mdelay(1000);
+			ctrl->lge_pan_data->do_rsp_nvm_write = false;
+		}
+	}
+#endif
+
 	on_cmds = &ctrl->on_cmds;
 
 	if ((pinfo->mipi.dms_mode == DYNAMIC_MODE_SWITCH_IMMEDIATE) &&
 			(pinfo->mipi.boot_mode != pinfo->mipi.mode))
 		on_cmds = &ctrl->post_dms_on_cmds;
 
+#if IS_ENABLED(CONFIG_LGE_READER_MODE)
+		lge_mdss_dsi_panel_send_on_cmds(ctrl, on_cmds, lge_get_reader_mode());
+#else
 	if (on_cmds->cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
+#endif
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.post_mdss_dsi_panel_on)
+		lge_mdss_dsi.post_mdss_dsi_panel_on(pdata);
+#endif
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_UNBLANK;
-	pr_debug("%s:-\n", __func__);
+	pr_info("%s:-\n", __func__);
 	return 0;
 }
 
@@ -688,12 +787,25 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 			goto end;
 	}
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+	if (pinfo->lge_pan_info.lge_panel_send_off_cmd == false) {
+		pr_debug("%s: skip panel off cmd, ctrl=%p ndx=%d\n", __func__, ctrl, ctrl->ndx);
+		lge_lg4945_panel_mode_cmd_send(pinfo->lge_pan_info.switch_mode, NULL);
+		goto end;
+	}
+#endif
+
 	if (ctrl->off_cmds.cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, &ctrl->off_cmds, CMD_REQ_COMMIT);
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.post_mdss_dsi_panel_off)
+		lge_mdss_dsi.post_mdss_dsi_panel_off(pdata);
+#endif
+
 end:
 	pinfo->blank_state = MDSS_PANEL_BLANK_BLANK;
-	pr_debug("%s:-\n", __func__);
+	pr_info("%s:-\n", __func__);
 	return 0;
 }
 
@@ -721,7 +833,7 @@ static int mdss_dsi_panel_low_power_config(struct mdss_panel_data *pdata,
 	else
 		pinfo->blank_state = MDSS_PANEL_BLANK_UNBLANK;
 
-	pr_debug("%s:-\n", __func__);
+	pr_info("%s:-\n", __func__);
 	return 0;
 }
 
@@ -768,9 +880,13 @@ static void mdss_dsi_parse_trigger(struct device_node *np, char *trigger,
 	}
 }
 
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE) || IS_ENABLED(CONFIG_LGE_READER_MODE)
+int mdss_dsi_parse_dcs_cmds(struct device_node *np,
+		struct dsi_panel_cmds *pcmds, char *cmd_key, char *link_key)
+#else
 static int mdss_dsi_parse_dcs_cmds(struct device_node *np,
 		struct dsi_panel_cmds *pcmds, char *cmd_key, char *link_key)
+#endif
 {
 	const char *data;
 	int blen = 0, len;
@@ -1312,6 +1428,9 @@ static int mdss_dsi_parse_panel_features(struct device_node *np,
 		"qcom,partial-update-enabled");
 	if (pinfo->mipi.mode == DSI_CMD_MODE) {
 		pinfo->partial_update_enabled = pinfo->partial_update_supported;
+#if !defined(CONFIG_LGE_PARTIAL_UPDATE)
+		pinfo->partial_update_enabled = 0;
+#endif
 		pr_info("%s: partial_update_enabled=%d\n", __func__,
 					pinfo->partial_update_enabled);
 		ctrl->set_col_page_addr = mdss_dsi_set_col_page_addr;
@@ -1334,6 +1453,15 @@ static int mdss_dsi_parse_panel_features(struct device_node *np,
 		"qcom,suspend-ulps-enabled");
 	pr_info("%s: ulps during suspend feature %s", __func__,
 		(pinfo->ulps_suspend_enabled ? "enabled" : "disabled"));
+
+#if defined(CONFIG_LGE_MIPI_P1_INCELL_QHD_CMD_PANEL)
+	if(lge_get_panel() == JDI_INCELL_CMD_PANEL) {
+		if (lge_get_boot_mode() == LGE_BOOT_MODE_CHARGERLOGO) {
+			pinfo->ulps_suspend_enabled = true;
+			pr_info("%s:enter chargerlogo, ulps during suspend feature %s\n", __func__, "enabled");
+		}
+	}
+#endif
 
 	mdss_dsi_parse_dms_config(np, ctrl);
 
@@ -1775,7 +1903,7 @@ static int mdss_panel_parse_dt(struct device_node *np,
 		else if (!strcmp(data, "vflip"))
 			pinfo->panel_orientation = MDP_FLIP_UD;
 	}
-
+#if !IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
 	ctrl_pdata->bklt_ctrl = UNKNOWN_CTRL;
 	data = of_get_property(np, "qcom,mdss-dsi-bl-pmic-control-type", NULL);
 	if (data) {
@@ -1827,6 +1955,7 @@ static int mdss_panel_parse_dt(struct device_node *np,
 								__func__);
 		}
 	}
+#endif
 	rc = of_property_read_u32(np, "qcom,mdss-brightness-max-level", &tmp);
 	pinfo->brightness_max = (!rc ? tmp : MDSS_MAX_BL_BRIGHTNESS);
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-bl-min-level", &tmp);
@@ -1834,7 +1963,12 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-bl-max-level", &tmp);
 	pinfo->bl_max = (!rc ? tmp : 255);
 	ctrl_pdata->bklt_max = pinfo->bl_max;
-
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+	if (lge_mdss_dsi.lge_mdss_panel_parse_dt)
+		rc = lge_mdss_dsi.lge_mdss_panel_parse_dt(np, ctrl_pdata);
+	if(rc)
+		goto error;
+#endif
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-interleave-mode", &tmp);
 	pinfo->mipi.interleave_mode = (!rc ? tmp : 0);
 
@@ -1912,6 +2046,11 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	pinfo->mipi.data_lane3 = of_property_read_bool(np,
 		"qcom,mdss-dsi-lane-3-state");
 
+#if defined(CONFIG_MACH_LGE)
+	rc = of_property_read_u32(np, "qcom,mdss-dsi-lane-hs", &tmp);
+	pinfo->mipi.force_clk_lane_hs = (!rc ? tmp : 0);
+#endif
+
 	pinfo->mipi.rx_eot_ignore = of_property_read_bool(np,
 		"qcom,mdss-dsi-rx-eot-ignore");
 	pinfo->mipi.tx_eot_append = of_property_read_bool(np,
@@ -1967,6 +2106,10 @@ static int mdss_panel_parse_dt(struct device_node *np,
 
 	mdss_dsi_parse_dfps_config(np, ctrl_pdata);
 
+#if IS_ENABLED(CONFIG_LGE_READER_MODE)
+	lge_mdss_dsi_parse_reader_mode_cmds(np, ctrl_pdata);
+#endif
+
 	return 0;
 
 error:
@@ -1997,6 +2140,10 @@ int mdss_dsi_panel_init(struct device_node *node,
 	} else {
 		pr_info("%s: Panel Name = %s\n", __func__, panel_name);
 		strlcpy(&pinfo->panel_name[0], panel_name, MDSS_MAX_PANEL_LEN);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_POWER_SEQUENCE)
+		if (lge_mdss_dsi.lge_mdss_dsi_panel_init)
+			rc = lge_mdss_dsi.lge_mdss_dsi_panel_init(node,ctrl_pdata,cmd_cfg_cont_splash);
+#endif
 	}
 	rc = mdss_panel_parse_dt(node, ctrl_pdata);
 	if (rc) {

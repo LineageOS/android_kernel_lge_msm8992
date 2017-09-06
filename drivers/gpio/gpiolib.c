@@ -1527,6 +1527,20 @@ void gpio_free(unsigned gpio)
 }
 EXPORT_SYMBOL_GPL(gpio_free);
 
+#ifdef CONFIG_LGE_PM_IDTP9017_WIRELESS_CHARGER
+int check_gpio_status(unsigned gpio) {
+	struct gpio_desc *desc;
+
+	desc = gpio_to_desc(gpio);
+
+	if (desc->label == NULL)
+		return -1;
+	else
+		return 1;
+}
+EXPORT_SYMBOL_GPL(check_gpio_status);
+#endif
+
 /**
  * gpio_request_one - request a single GPIO with initial configuration
  * @gpio:	the GPIO number

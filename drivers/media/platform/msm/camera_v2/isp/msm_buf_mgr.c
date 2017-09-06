@@ -83,14 +83,18 @@ static uint32_t msm_isp_get_buf_handle(
 	uint32_t session_id, uint32_t stream_id)
 {
 	int i;
+        mutex_lock(&buf_mgr->lock);/*LGE_CHANGE, CST, add protection for buffer queue at Dual CAmera*/
 	if ((buf_mgr->buf_handle_cnt << 8) == 0)
 		buf_mgr->buf_handle_cnt++;
 
 	for (i = 0; i < buf_mgr->num_buf_q; i++) {
 		if (buf_mgr->bufq[i].session_id == session_id &&
 			buf_mgr->bufq[i].stream_id == stream_id)
-			return 0;
-	}
+        {
+            mutex_unlock(&buf_mgr->lock);/*LGE_CHANGE, CST, add protection for buffer queue at Dual Camera */
+            return 0;
+	    }
+    }
 
 	for (i = 0; i < buf_mgr->num_buf_q; i++) {
 		if (buf_mgr->bufq[i].bufq_handle == 0) {
@@ -98,10 +102,12 @@ static uint32_t msm_isp_get_buf_handle(
 				0, sizeof(struct msm_isp_bufq));
 			buf_mgr->bufq[i].bufq_handle =
 				(++buf_mgr->buf_handle_cnt) << 8 | i;
+            mutex_unlock(&buf_mgr->lock);/*LGE_CHANGE, CST, add protection for buffer queue at Dual Camera*/
 			return buf_mgr->bufq[i].bufq_handle;
 		}
 	}
-	return 0;
+	mutex_unlock(&buf_mgr->lock);/*LGE_CHANGE, CST, add protection for buffer queue at Dual Camera*/
+    return 0;
 }
 
 static int msm_isp_free_buf_handle(struct msm_isp_buf_mgr *buf_mgr,
@@ -534,7 +540,7 @@ static int msm_isp_get_buf(struct msm_isp_buf_mgr *buf_mgr, uint32_t id,
 
 			}
 		} else {
-			pr_err("%s: No Buffer session_id: %d stream_id: %d\n",
+			pr_debug("%s: No Buffer session_id: %d stream_id: %d\n",
 				__func__, bufq->session_id, bufq->stream_id);
 			rc = -EINVAL;
 		}
@@ -1045,6 +1051,28 @@ static int msm_isp_request_bufq(struct msm_isp_buf_mgr *buf_mgr,
 	return 0;
 }
 
+/*LGE_CHANGE, CST, flush share buffers*/
+static int msm_isp_flush_share_buf(struct msm_isp_buf_mgr *buf_mgr,
+	uint32_t bufq_handle)
+{
+	struct msm_isp_buffer *buf_info = NULL;
+	struct msm_isp_bufq *bufq =
+		msm_isp_get_bufq(buf_mgr, bufq_handle);
+	if (!bufq)
+		return -EINVAL;
+
+	if (bufq->buf_type == ISP_SHARE_BUF) {
+		while (!list_empty(&bufq->share_head)) {
+			buf_info = list_entry((&bufq->share_head)->next,
+				typeof(*buf_info), share_list);
+			list_del(&(buf_info->share_list));
+			if (buf_info->buf_reuse_flag)
+				kfree(buf_info);
+		 }
+	}
+	return 0;
+}
+
 static int msm_isp_release_bufq(struct msm_isp_buf_mgr *buf_mgr,
 	uint32_t bufq_handle)
 {
@@ -1062,6 +1090,7 @@ static int msm_isp_release_bufq(struct msm_isp_buf_mgr *buf_mgr,
 	msm_isp_buf_unprepare_all(buf_mgr, bufq_handle);
 
 	spin_lock_irqsave(&bufq->bufq_lock, flags);
+	msm_isp_flush_share_buf(buf_mgr, bufq_handle); /*LGE_CHANGE, CST, flush share buffers*/
 	kfree(bufq->bufs);
 	msm_isp_free_buf_handle(buf_mgr, bufq_handle);
 

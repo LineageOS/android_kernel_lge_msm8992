@@ -126,7 +126,7 @@ struct share_mem_buf {
 struct mem_map_table {
 	dma_addr_t		phys;
 	void			*data;
-	uint32_t		size; /* size of buffer */
+	size_t		size; /* size of buffer */
 	struct ion_handle	*handle;
 	struct ion_client	*client;
 };
@@ -244,6 +244,41 @@ struct vss_unmap_memory_cmd {
 #define VSS_IMVM_CMD_SET_CAL_MEDIA_TYPE		0x0001137B
 #define VSS_IHDVOICE_CMD_ENABLE				0x000130A2
 #define VSS_IHDVOICE_CMD_DISABLE			0x000130A3
+
+#ifdef CONFIG_SND_LGE_VOC_CONF
+//response data struct
+struct lge_voc_conf_t
+{
+	uint32_t network_id;
+	uint32_t rx_pp_sr;
+	uint32_t tx_pp_sr;
+};
+//response opcode
+#define LGE_VOC_CONF_RSP 0x10001000
+//network id
+#define VSS_ICOMMON_CAL_NETWORK_ID_CDMA 0x0001135F
+#define VSS_ICOMMON_CAL_NETWORK_ID_GSM 0x00011360
+#define VSS_ICOMMON_CAL_NETWORK_ID_WCDMA 0x00011361
+#define VSS_ICOMMON_CAL_NETWORK_ID_VOIP 0x00011362
+#define VSS_ICOMMON_CAL_NETWORK_ID_LTE 0x00011363
+//sample rate
+#define VSS_ICOMMON_CAL_SAMPLE_RATE_NB 8000
+#define VSS_ICOMMON_CAL_SAMPLE_RATE_WB 16000
+//bit
+enum{
+	LGE_AUDIO_NETWORK_NONE = 0x10000,
+	LGE_AUDIO_NETWORK_CDMA = 0x20000,
+	LGE_AUDIO_NETWORK_GSM = 0x40000,
+	LGE_AUDIO_NETWORK_WCDMA = 0x80000,
+	LGE_AUDIO_NETWORK_VOIP = 0x100000,
+	LGE_AUDIO_NETWORK_LTE = 0x200000,
+	LGE_AUDIO_SAMPLE_RATE_TX_NB = 0x1,
+	LGE_AUDIO_SAMPLE_RATE_TX_WB = 0x2,
+	LGE_AUDIO_SAMPLE_RATE_RX_NB = 0x4,
+	LGE_AUDIO_SAMPLE_RATE_RX_WB = 0x8,
+};
+
+#endif
 
 enum msm_audio_voc_rate {
 		VOC_0_RATE, /* Blank frame */
@@ -1627,6 +1662,11 @@ int voc_set_tx_mute(uint32_t session_id, uint32_t dir, uint32_t mute,
 		    uint32_t ramp_duration);
 int voc_set_device_mute(uint32_t session_id, uint32_t dir, uint32_t mute,
 			uint32_t ramp_duration);
+//[Audio][BSP] junday.lee@lge.com phonememo initial code [START]
+#ifdef CONFIG_SND_LGE_USE_PHONE_MEMO
+int voc_set_phonememo_tx_mute(uint32_t session_id, uint32_t dir, uint32_t mute);
+#endif //CONFIG_SND_LGE_USE_PHONE_MEMO
+//[Audio][BSP] junday.@lge.com phonememo initial code [END]
 int voc_get_rx_device_mute(uint32_t session_id);
 int voc_set_route_flag(uint32_t session_id, uint8_t path_dir, uint8_t set);
 uint8_t voc_get_route_flag(uint32_t session_id, uint8_t path_dir);

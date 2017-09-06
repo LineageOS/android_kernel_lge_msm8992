@@ -139,6 +139,7 @@ void __init arm64_memblock_init(void)
 
 	/* Register the kernel text, kernel data and initrd with memblock */
 	memblock_reserve(__pa(_text), _end - _text);
+
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (phys_initrd_size) {
 		memblock_reserve(phys_initrd_start, phys_initrd_size);

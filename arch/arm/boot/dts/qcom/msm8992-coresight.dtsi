@@ -214,6 +214,7 @@
 		coresight-child-list = <&funnel_apss1>;
 		coresight-child-ports = <3>;
 
+		qcom,tpda-atid = <64>;
 		qcom,cmb-elem-size = <0 64>;
 
 		clocks = <&clock_rpm clk_qdss_clk>,

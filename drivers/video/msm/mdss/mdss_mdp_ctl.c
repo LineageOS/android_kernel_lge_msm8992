@@ -27,6 +27,9 @@
 #include "mdss_mdp_trace.h"
 #include "mdss_debug.h"
 
+static inline u32 get_panel_width(struct mdss_mdp_ctl *ctl);
+static inline int mdss_panel_get_htotal_ctl(struct mdss_mdp_ctl *ctl, bool consider_fbc);
+
 static inline u64 fudge_factor(u64 val, u32 numer, u32 denom)
 {
 	u64 result = (val * (u64)numer);
@@ -1961,14 +1964,35 @@ static int mdss_mdp_ctl_fbc_enable(int enable,
 			((fbc->lossy_rgb_thd) << 4) | fbc->lossy_mode_idx;
 	}
 
-	mdss_mdp_pingpong_write(mixer->pingpong_base,
-		MDSS_MDP_REG_PP_FBC_MODE, mode);
-	mdss_mdp_pingpong_write(mixer->pingpong_base,
-		MDSS_MDP_REG_PP_FBC_BUDGET_CTL, budget_ctl);
-	mdss_mdp_pingpong_write(mixer->pingpong_base,
-		MDSS_MDP_REG_PP_FBC_LOSSY_MODE, lossy_mode);
+	if(mixer->pingpong_base){
+		mdss_mdp_pingpong_write(mixer->pingpong_base,
+				MDSS_MDP_REG_PP_FBC_MODE, mode);
+		mdss_mdp_pingpong_write(mixer->pingpong_base,
+				MDSS_MDP_REG_PP_FBC_BUDGET_CTL, budget_ctl);
+		mdss_mdp_pingpong_write(mixer->pingpong_base,
+				MDSS_MDP_REG_PP_FBC_LOSSY_MODE, lossy_mode);
+	}
 
 	return 0;
+}
+
+static inline int mdss_panel_get_htotal_ctl(struct mdss_mdp_ctl *ctl, bool
+	consider_fbc)
+{
+	int adj_xres;
+	struct mdss_panel_info *pinfo = &ctl->panel_data->panel_info;
+
+	adj_xres = get_panel_xres(&ctl->panel_data->panel_info);
+	if (ctl->panel_data->next && is_pingpong_split(ctl->mfd))
+		adj_xres += get_panel_xres(&ctl->panel_data->next->panel_info);
+
+	if (consider_fbc && pinfo->fbc.enabled)
+		adj_xres = mult_frac(adj_xres,
+	pinfo->fbc.target_bpp, pinfo->bpp);
+
+	return adj_xres + pinfo->lcdc.h_back_porch +
+		pinfo->lcdc.h_front_porch +
+		pinfo->lcdc.h_pulse_width;
 }
 
 void mdss_mdp_get_interface_type(struct mdss_mdp_ctl *ctl, int *intf_type,
@@ -2517,6 +2541,22 @@ int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg)
 	do {
 		if (pdata->event_handler)
 			rc = pdata->event_handler(pdata, event, arg);
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+		if(pdata->next){
+			pdata->next->panel_info.lge_pan_info.lge_panel_send_on_cmd =
+				pdata->panel_info.lge_pan_info.lge_panel_send_on_cmd;
+			pdata->next->panel_info.lge_pan_info.lge_panel_send_off_cmd =
+				pdata->panel_info.lge_pan_info.lge_panel_send_off_cmd;
+			pdata->next->panel_info.lge_pan_info.cur_panel_mode =
+				pdata->panel_info.lge_pan_info.cur_panel_mode;
+			pdata->next->panel_info.lge_pan_info.switch_mode =
+				pdata->panel_info.lge_pan_info.switch_mode;
+			pdata->next->panel_info.lge_pan_info.ext_off =
+				pdata->panel_info.lge_pan_info.ext_off;
+			pdata->next->panel_info.lge_pan_info.ext_off_temp =
+				pdata->panel_info.lge_pan_info.ext_off_temp;
+		}
+#endif
 		pdata = pdata->next;
 	} while (rc == 0 && pdata && pdata->active);
 
@@ -2617,6 +2657,11 @@ static int mdss_mdp_ctl_start_sub(struct mdss_mdp_ctl *ctl, bool handoff)
 
 	writel_relaxed(temp, ctl->mdata->mdp_base +
 		MDSS_MDP_REG_DISP_INTF_SEL);
+
+#if defined(CONFIG_LGE_TE_SEL)
+	writel_relaxed(0x2002000, ctl->mdata->mdp_base +
+		MDSS_MDP_REG_VSYNC_SEL); // mdp_vsync_e
+#endif
 
 	outsize = (mixer->height << 16) | mixer->width;
 	mdp_mixer_write(mixer, MDSS_MDP_REG_LM_OUT_SIZE, outsize);
@@ -2761,6 +2806,8 @@ int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int power_state)
 		off = __mdss_mdp_ctl_get_mixer_off(ctl->mixer_right);
 		mdss_mdp_ctl_write(ctl, off, 0);
 	}
+
+	ctl->power_state = power_state;
 
 	ctl->play_cnt = 0;
 
@@ -2937,6 +2984,32 @@ void mdss_mdp_set_roi(struct mdss_mdp_ctl *ctl,
 		mdss_mdp_set_mixer_roi(ctl->mixer_right->ctl, r_roi);
 }
 
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+extern bool is_roi_valid(void);
+static void mdss_mdp_modify_mixer_roi(struct mdss_mdp_ctl *ctl)
+{
+	struct mdss_rect mixer_roi;
+	struct mdss_rect roi;
+
+	roi = (struct mdss_rect){0, 160,
+			ctl->mixer_left->width,
+			ctl->mixer_left->height-160};
+
+	if (!mdss_rect_cmp(&roi, &ctl->roi)) {
+		ctl->roi = roi;
+
+		mixer_roi = ctl->mixer_left->roi;
+		if ((mixer_roi.w != roi.w) ||
+			(mixer_roi.h != roi.h)) {
+			ctl->mixer_left->roi = roi;
+		}
+	}
+
+	pr_info("Modified ROI for NULL kickoff : [%d]: [%d, %d, %d, %d]\n",
+		ctl->num, ctl->roi.x, ctl->roi.y, ctl->roi.w, ctl->roi.h);
+}
+#endif
+
 static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 	int mixer_mux)
 {
@@ -2983,27 +3056,12 @@ static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 	}
 
 	pipe = mixer->stage_pipe[MDSS_MDP_STAGE_BASE * MAX_PIPES_PER_STAGE];
-	if (pipe == NULL) {
+	if (!pipe || !mdss_has_quirk(mdata, MDSS_QUIRK_BASE_FULLSCREEN))
 		mixercfg = MDSS_MDP_LM_BORDER_COLOR;
-	} else {
-		if (mdata->mdp_rev == MDSS_MDP_HW_REV_200) {
-			mpq_num = mdss_mdp_mpq_pipe_num_map(pipe->num);
-			mixercfg = 1 << (3 * mpq_num);
-		} else if (pipe->num == MDSS_MDP_SSPP_VIG3 ||
-			pipe->num == MDSS_MDP_SSPP_RGB3) {
-			/* Add 2 to account for Cursor & Border bits */
-			mixercfg = 1 << ((3 * pipe->num)+2);
-		} else if (pipe->type == MDSS_MDP_PIPE_TYPE_CURSOR) {
-			mixercfg_extn = BIT(20 + (6 *
-					(pipe->num - MDSS_MDP_SSPP_CURSOR0)));
-		} else {
-			mixercfg = 1 << (3 * pipe->num);
-		}
-		if (pipe->src_fmt->alpha_enable)
-			bg_alpha_enable = 1;
-	}
+	if (pipe && pipe->src_fmt->alpha_enable)
+		bg_alpha_enable = 1;
 
-	i = MDSS_MDP_STAGE_0 * MAX_PIPES_PER_STAGE;
+	i = MDSS_MDP_STAGE_BASE * MAX_PIPES_PER_STAGE;
 	for (; i < MAX_PIPES_PER_LM; i++) {
 		pipe = mixer->stage_pipe[i];
 		if (pipe == NULL)
@@ -3023,6 +3081,11 @@ static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 		 */
 		if (!pipe->src_split_req || !mixer->is_right_mixer)
 			mixer->next_pipe_map |= pipe->ndx;
+
+		if (stage == MDSS_MDP_STAGE_BASE) {
+			pr_debug("pnum=%d stg=%d\n", pipe->num, stage);
+			goto skip_blending;
+		}
 
 		blend_stage = stage - MDSS_MDP_STAGE_0;
 		off = MDSS_MDP_REG_LM_BLEND_OFFSET(blend_stage);
@@ -3097,6 +3160,15 @@ static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 		if (!pipe->src_fmt->alpha_enable && bg_alpha_enable)
 			mixer_op_mode = 0;
 
+		pr_debug("blend stg=%d op=%x fg_alpha=%x bg_alpha=%x\n", stage,
+						blend_op, fg_alpha, bg_alpha);
+		mdp_mixer_write(mixer, off + MDSS_MDP_REG_LM_OP_MODE, blend_op);
+		mdp_mixer_write(mixer, off + MDSS_MDP_REG_LM_BLEND_FG_ALPHA,
+							fg_alpha);
+		mdp_mixer_write(mixer, off + MDSS_MDP_REG_LM_BLEND_BG_ALPHA,
+							bg_alpha);
+
+skip_blending:
 		if (mdata->mdp_rev == MDSS_MDP_HW_REV_200) {
 			mpq_num = mdss_mdp_mpq_pipe_num_map(pipe->num);
 			mixercfg |= stage << (3 * mpq_num);
@@ -3133,18 +3205,12 @@ static void mdss_mdp_mixer_setup(struct mdss_mdp_ctl *master_ctl,
 		}
 
 		trace_mdp_sspp_change(pipe);
-
-		pr_debug("stg=%d op=%x fg_alpha=%x bg_alpha=%x\n", stage,
-					blend_op, fg_alpha, bg_alpha);
-		mdp_mixer_write(mixer, off + MDSS_MDP_REG_LM_OP_MODE, blend_op);
-		mdp_mixer_write(mixer, off + MDSS_MDP_REG_LM_BLEND_FG_ALPHA,
-				   fg_alpha);
-		mdp_mixer_write(mixer, off + MDSS_MDP_REG_LM_BLEND_BG_ALPHA,
-				   bg_alpha);
 	}
 
 	if (mixer->cursor_enabled)
 		mixercfg |= MDSS_MDP_LM_CURSOR_OUT;
+
+	mixercfg |= MDSS_MDP_LM_BORDER_COLOR;
 
 update_mixer:
 	if (mixer->num == MDSS_MDP_INTF_LAYERMIXER3)
@@ -3173,6 +3239,27 @@ update_mixer:
 		mixer_op_mode, mixer->roi.w, mixer->roi.h);
 	MDSS_XLOG(mixer->num, mixercfg, mixercfg_extn, mixer_op_mode,
 		mixer->roi.h, mixer->roi.w);
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_EXTENDED_PANEL)
+	//mixercfg 0x1000000 : NULL with border fill
+	//skip border fill case
+	// 1. U2 -> U3 partial - overlay on
+	// 2. U0 -> fake U3 -> U2 - NULL kickoff while fake U3
+	// 3. U3 -> U2
+	if(mixercfg == MDSS_MDP_LM_BORDER_COLOR && is_roi_valid()) {
+		if((master_ctl->mfd->panel_info->lge_pan_info.cur_panel_mode == LGE_PANEL_MODE_U2 &&
+			master_ctl->mfd->panel_info->lge_pan_info.skip_border_fill == 1) ||
+			(master_ctl->mfd->fakeu3 == 1 &&
+			 master_ctl->mfd->panel_info->lge_pan_info.skip_border_fill == 0) ||
+			(master_ctl->mfd->panel_info->lge_pan_info.lge_panel_send_off_cmd == false)) {
+			mdss_mdp_modify_mixer_roi(ctl);
+			mdp_mixer_write(mixer, MDSS_MDP_REG_LM_OUT_SIZE, ((mixer->roi.h << 16) | mixer->roi.w));
+			pr_info("modified mixer h : %d, mixer w :%d, overlay on/off state=%d, fake_u3=%d \n",
+				mixer->roi.h,mixer->roi.w, master_ctl->mfd->panel_info->lge_pan_info.skip_border_fill,
+				master_ctl->mfd->fakeu3);
+		}
+	}
+#endif
 }
 
 int mdss_mdp_mixer_addr_setup(struct mdss_data_type *mdata,
@@ -4069,6 +4156,7 @@ static int __mdss_mdp_mixer_handoff_helper(struct mdss_mdp_mixer *mixer,
 	pr_debug("Staging pipe num %d on mixer num %d\n",
 		pipe->num, mixer->num);
 	mixer->stage_pipe[MDSS_MDP_STAGE_UNUSED + right_blend] = pipe;
+	pipe->is_right_blend = right_blend;
 	pipe->mixer_left = mixer;
 	pipe->mixer_stage = MDSS_MDP_STAGE_UNUSED;
 

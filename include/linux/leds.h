@@ -84,6 +84,10 @@ struct led_classdev {
 	/* true if activated - deactivate routine uses it to do cleanup */
 	bool			activated;
 #endif
+
+#if IS_ENABLED(CONFIG_LGE_DISPLAY_DUAL_BACKLIGHT)
+	int			led_id;
+#endif
 };
 
 extern int led_classdev_register(struct device *parent,
