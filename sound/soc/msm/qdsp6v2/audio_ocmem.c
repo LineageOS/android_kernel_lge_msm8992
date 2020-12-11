@@ -243,7 +243,7 @@ int audio_ocmem_enable(int cid)
 	struct ocmem_buf *buf = NULL;
 	struct avcs_cmd_rsp_get_low_power_segments_info_t *lp_segptr;
 
-	pr_debug("%s, %p\n", __func__, &audio_ocmem_lcl);
+	pr_debug("%s, %pK\n", __func__, &audio_ocmem_lcl);
 	atomic_set(&audio_ocmem_lcl.audio_state, OCMEM_STATE_DEFAULT);
 	if (audio_ocmem_lcl.lp_memseg_ptr == NULL) {
 		/* Retrieve low power segments */
@@ -907,7 +907,7 @@ static int ocmem_audio_client_probe(struct platform_device *pdev)
 
 	audio_ocmem_lcl.audio_ocmem_workqueue =
 		alloc_workqueue("ocmem_audio_client_driver_audio",
-					WQ_NON_REENTRANT | WQ_UNBOUND, 0);
+					WQ_UNBOUND, 0);
 	if (!audio_ocmem_lcl.audio_ocmem_workqueue) {
 		pr_err("%s: Failed to create ocmem audio work queue\n",
 			__func__);
@@ -916,8 +916,7 @@ static int ocmem_audio_client_probe(struct platform_device *pdev)
 	}
 
 	audio_ocmem_lcl.voice_ocmem_workqueue =
-		alloc_workqueue("ocmem_audio_client_driver_voice",
-					WQ_NON_REENTRANT, 0);
+		alloc_workqueue("ocmem_audio_client_driver_voice", 0);
 	if (!audio_ocmem_lcl.voice_ocmem_workqueue) {
 		pr_err("%s: Failed to create ocmem voice work queue\n",
 			__func__);

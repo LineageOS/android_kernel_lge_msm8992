@@ -11,6 +11,9 @@
  * management can be a bitch. See 'mm/memory.c': 'copy_page_range()'
  */
 
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+#include <linux/sched.h>
+#endif
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/unistd.h>
@@ -71,6 +74,7 @@
 #include <linux/signalfd.h>
 #include <linux/uprobes.h>
 #include <linux/aio.h>
+#include <linux/cpufreq.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -248,6 +252,9 @@ static void account_kernel_stack(struct thread_info *ti, int account)
 
 void free_task(struct task_struct *tsk)
 {
+#ifdef CONFIG_CPU_FREQ_STAT
+	cpufreq_task_stats_free(tsk);
+#endif
 	account_kernel_stack(tsk->stack, -1);
 	arch_release_thread_info(tsk->stack);
 	free_thread_info(tsk->stack);
@@ -284,6 +291,17 @@ int task_free_unregister(struct notifier_block *n)
 }
 EXPORT_SYMBOL(task_free_unregister);
 
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+static void cpufreq_stats_tsk_free(struct task_struct *tsk)
+{
+	int cpu;
+	for (cpu = 0; cpu < NR_CPUS; cpu++) {
+		kfree(tsk->cpufreq_stats[cpu].time_in_state);
+		kfree(tsk->cpufreq_stats[cpu].cumulative_time_in_state);
+	}
+}
+#endif
+
 void __put_task_struct(struct task_struct *tsk)
 {
 	WARN_ON(!tsk->exit_state);
@@ -293,6 +311,9 @@ void __put_task_struct(struct task_struct *tsk)
 	security_task_free(tsk);
 	exit_creds(tsk);
 	delayacct_tsk_free(tsk);
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	cpufreq_stats_tsk_free(tsk);
+#endif
 	put_signal_struct(tsk->signal);
 
 	atomic_notifier_call_chain(&task_free_notifier, 0, tsk);
@@ -363,6 +384,8 @@ static struct task_struct *dup_task_struct(struct task_struct *orig)
 	err = arch_dup_task_struct(tsk, orig);
 	if (err)
 		goto free_ti;
+
+	tsk->flags &= ~PF_SU;
 
 	tsk->stack = ti;
 #ifdef CONFIG_SECCOMP
@@ -1223,6 +1246,35 @@ static void posix_cpu_timers_init(struct task_struct *tsk)
 	INIT_LIST_HEAD(&tsk->cpu_timers[2]);
 }
 
+
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+/*
+ * Initialize cpufreq_stats for a given task.
+ */
+
+static void cpufreq_stats_tsk_init(struct task_struct *tsk)
+{
+	int cpu, i, max_state = 0;
+	for (cpu = 0; cpu < NR_CPUS; cpu++) {
+		tsk->cpufreq_stats[cpu].max_state = 0;
+		tsk->cpufreq_stats[cpu].time_in_state = NULL;
+		tsk->cpufreq_stats[cpu].cumulative_time_in_state = NULL;
+		max_state = cpufreq_stats_get_max_state(cpu);
+		tsk->cpufreq_stats[cpu].max_state = max_state;
+		if (max_state > 0) {
+			tsk->cpufreq_stats[cpu].time_in_state =
+				kzalloc((max_state * sizeof(u64)), GFP_KERNEL);
+			tsk->cpufreq_stats[cpu].cumulative_time_in_state =
+				kzalloc((max_state * sizeof(u64)), GFP_KERNEL);
+			for (i = 0; i < max_state; i++) {
+				tsk->cpufreq_stats[cpu].time_in_state[i] = 0;
+				tsk->cpufreq_stats[cpu].cumulative_time_in_state[i]
+					= 0;
+			}
+		}
+	}
+}
+#endif
 /*
  * This creates a new process as a copy of the old one,
  * but does not actually start it yet.
@@ -1461,7 +1513,9 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	p->tgid = p->pid;
 	if (clone_flags & CLONE_THREAD)
 		p->tgid = current->tgid;
-
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	cpufreq_stats_tsk_init(p);
+#endif
 	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
 	/*
 	 * Clear TID on mm_release()?
@@ -1570,6 +1624,7 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 			attach_pid(p, PIDTYPE_SID, task_session(current));
 			list_add_tail(&p->sibling, &p->real_parent->children);
 			list_add_tail_rcu(&p->tasks, &init_task.tasks);
+			add_2_adj_tree(p);
 			__this_cpu_inc(process_counts);
 		} else {
 			current->signal->nr_threads++;
@@ -1635,6 +1690,9 @@ bad_fork_cleanup_cgroup:
 		threadgroup_change_end(current);
 	cgroup_exit(p, 0);
 	delayacct_tsk_free(p);
+#ifdef CONFIG_TASK_CPUFREQ_STATS
+	cpufreq_stats_tsk_free(p);
+#endif
 	module_put(task_thread_info(p)->exec_domain->module);
 bad_fork_cleanup_count:
 	atomic_dec(&p->cred->user->processes);
@@ -1655,7 +1713,7 @@ static inline void init_idle_pids(struct pid_link *links)
 	}
 }
 
-struct task_struct * __cpuinit fork_idle(int cpu)
+struct task_struct * fork_idle(int cpu)
 {
 	struct task_struct *task;
 	task = copy_process(CLONE_VM, 0, 0, NULL, &init_struct_pid, 0);

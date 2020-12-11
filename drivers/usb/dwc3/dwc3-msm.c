@@ -348,7 +348,7 @@ static void vzw_drv_check_work(struct work_struct *w)
 		return;
 	}
 
-	queue_delayed_work(system_nrt_wq, &mdwc->drv_check_work, delay);
+	schedule_delayed_work(&mdwc->drv_check_work, delay);
 }
 
 static void vzw_drv_check_state_work(struct work_struct *w)
@@ -362,7 +362,7 @@ static void vzw_drv_check_state_work(struct work_struct *w)
 		mdwc->drv_state = USB_DRV_STATE_DISCONNECTED;
 
 	cancel_delayed_work_sync(&mdwc->drv_check_work);
-	queue_delayed_work(system_nrt_wq, &mdwc->drv_check_work, 0);
+	schedule_delayed_work(&mdwc->drv_check_work, 0);
 }
 #endif
 
@@ -805,14 +805,14 @@ static int dwc3_msm_ep_queue(struct usb_ep *ep,
 
 	if (!dep->endpoint.desc) {
 		dev_err(mdwc->dev,
-			"%s: trying to queue request %p to disabled ep %s\n",
+			"%s: trying to queue request %pK to disabled ep %s\n",
 			__func__, request, ep->name);
 		return -EPERM;
 	}
 
 	if (dep->number == 0 || dep->number == 1) {
 		dev_err(mdwc->dev,
-			"%s: trying to queue dbm request %p to control ep %s\n",
+			"%s: trying to queue dbm request %pK to control ep %s\n",
 			__func__, request, ep->name);
 		return -EPERM;
 	}
@@ -821,7 +821,7 @@ static int dwc3_msm_ep_queue(struct usb_ep *ep,
 	if (dep->busy_slot != dep->free_slot || !list_empty(&dep->request_list)
 					 || !list_empty(&dep->req_queued)) {
 		dev_err(mdwc->dev,
-			"%s: trying to queue dbm request %p tp ep %s\n",
+			"%s: trying to queue dbm request %pK tp ep %s\n",
 			__func__, request, ep->name);
 		return -EPERM;
 	} else {
@@ -866,7 +866,7 @@ static int dwc3_msm_ep_queue(struct usb_ep *ep,
 		return ret;
 	}
 
-	dev_vdbg(dwc->dev, "%s: queing request %p to ep %s length %d\n",
+	dev_vdbg(dwc->dev, "%s: queing request %pK to ep %s length %d\n",
 			__func__, request, ep->name, request->length);
 
 	dbm_event_buffer_config(mdwc->dbm,
@@ -1073,7 +1073,7 @@ void msm_dwc3_restart_usb_session(struct usb_gadget *gadget)
 		return;
 
 	dev_dbg(mdwc->dev, "%s\n", __func__);
-	queue_work(system_nrt_wq, &mdwc->restart_usb_work);
+	schedule_work(&mdwc->restart_usb_work);
 }
 EXPORT_SYMBOL(msm_dwc3_restart_usb_session);
 
@@ -1085,7 +1085,7 @@ EXPORT_SYMBOL(msm_dwc3_restart_usb_session);
  */
 int msm_register_usb_ext_notification(struct usb_ext_notification *info)
 {
-	pr_debug("%s usb_ext: %p\n", __func__, info);
+	pr_debug("%s usb_ext: %pK\n", __func__, info);
 
 	if (info) {
 		if (usb_ext) {
@@ -1315,7 +1315,7 @@ static void dwc3_msm_notify_event(struct dwc3 *dwc, unsigned event)
 		dwc3_msm_write_reg(mdwc->base, DWC3_GCTL, reg);
 
 		/* restart USB which performs full reset and reconnect */
-		queue_work(system_nrt_wq, &mdwc->restart_usb_work);
+		schedule_work(&mdwc->restart_usb_work);
 		break;
 	case DWC3_CONTROLLER_RESET_EVENT:
 		dev_dbg(mdwc->dev, "DWC3_CONTROLLER_RESET_EVENT received\n");
@@ -1420,6 +1420,17 @@ static bool dwc3_chg_det_check_linestate(struct dwc3_msm *mdwc)
 
 	chg_det = dwc3_msm_read_reg(mdwc->base, CHARGING_DET_OUTPUT_REG);
 	return chg_det & (3 << 8);
+}
+
+static u32 dwc3_msm_get_linestate(struct dwc3_charger *charger)
+{
+	struct dwc3_msm *mdwc = container_of(charger, struct dwc3_msm, charger);
+	u32 linestate;
+
+	linestate = dwc3_msm_read_reg_field(mdwc->base, CHARGING_DET_OUTPUT_REG,
+								(3 << 8));
+	pr_debug("line state in chg_det_output_reg = 0x%08x\n", linestate);
+	return linestate;
 }
 
 static bool dwc3_chg_det_check_output(struct dwc3_msm *mdwc)
@@ -1601,7 +1612,7 @@ static void dwc3_chg_detect_work(struct work_struct *w)
 		return;
 	}
 
-	queue_delayed_work(system_nrt_wq, &mdwc->chg_work, delay);
+	schedule_delayed_work(&mdwc->chg_work, delay);
 }
 
 #ifdef CONFIG_LGE_PM_USB_ID
@@ -1617,8 +1628,7 @@ static void dwc3_cable_adc_work(struct work_struct *w)
 			if (PTR_ERR(mdwc->vadc_id_dev) == -EPROBE_DEFER) {
 				dev_err(mdwc->dev, "%s: qpnp vadc not yet "
 						"probed.\n",  __func__);
-				queue_delayed_work(system_nrt_wq,
-						&mdwc->cable_adc_work,
+				schedule_delayed_work(&mdwc->cable_adc_work,
 						msecs_to_jiffies(200));
 				return;
 			}
@@ -1639,7 +1649,7 @@ static void dwc3_read_cable_adc(struct dwc3_charger *charger, bool start)
 	if (start) {
 		cancel_delayed_work_sync(&mdwc->cable_adc_work);
 		charger->adc_read_complete = false;
-		queue_delayed_work(system_nrt_wq, &mdwc->cable_adc_work, 0);
+		schedule_delayed_work(&mdwc->cable_adc_work, 0);
 	} else {
 		cancel_delayed_work_sync(&mdwc->cable_adc_work);
 		charger->adc_read_complete = false;
@@ -1669,7 +1679,7 @@ static void dwc3_start_chg_det(struct dwc3_charger *charger, bool start)
 
 	mdwc->chg_state = USB_CHG_STATE_UNDEFINED;
 	charger->chg_type = DWC3_INVALID_CHARGER;
-	queue_delayed_work(system_nrt_wq, &mdwc->chg_work, 0);
+	schedule_delayed_work(&mdwc->chg_work, 0);
 }
 
 static void dwc3_msm_power_collapse_por(struct dwc3_msm *mdwc)
@@ -2579,11 +2589,9 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 {
 	struct dwc3_msm *mdwc = container_of(psy, struct dwc3_msm,
 								usb_psy);
-#ifndef CONFIG_LGE_PM_QC20_SCENARIO
 	struct dwc3 *dwc = platform_get_drvdata(mdwc->dwc3);
 	struct dwc3_otg *dotg = dwc->dotg;
 	struct usb_phy *phy = dotg->otg.phy;
-#endif
 #if defined CONFIG_LGE_USB_MAXIM_EVP && defined CONFIG_LGE_PM_MAXIM_EVP_CONTROL
 	static int evp_vol;
 #endif
@@ -2594,9 +2602,9 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 		mdwc->id_state = val->intval ? DWC3_ID_GROUND : DWC3_ID_FLOAT;
 		if (mdwc->otg_xceiv)
 #ifdef CONFIG_LGE_PM_USB_ID
-			queue_work(system_nrt_wq, &mdwc->id_work.work);
+			schedule_work(&mdwc->id_work.work);
 #else
-			queue_work(system_nrt_wq, &mdwc->id_work);
+			schedule_work(&mdwc->id_work);
 #endif
 
 		break;
@@ -2633,12 +2641,11 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			 * charging CDP complaince test fails if delay > 120ms.
 			 */
 			dbg_event(0xFF, "Q RW (vbus)", val->intval);
-			queue_delayed_work(system_nrt_wq,
-							&mdwc->resume_work, 12);
+			schedule_delayed_work(&mdwc->resume_work, 12);
 		}
 #ifdef CONFIG_LGE_USB_CHARGING_SPEC_VZW
 		if (!mdwc->vbus_active) {
-			queue_delayed_work(system_nrt_wq, &mdwc->drv_check_state_work, 0);
+			schedule_delayed_work(&mdwc->drv_check_state_work, 0);
 		}
 #endif
 		break;
@@ -2671,9 +2678,7 @@ static int dwc3_msm_power_set_property_usb(struct power_supply *psy,
 			break;
 		case POWER_SUPPLY_TYPE_USB_HVDCP:
 			mdwc->charger.chg_type = DWC3_DCP_CHARGER;
-#ifndef CONFIG_LGE_PM_QC20_SCENARIO
 			usb_phy_set_power(phy, hvdcp_max_current);
-#endif
 			break;
 		case POWER_SUPPLY_TYPE_USB_CDP:
 			mdwc->charger.chg_type = DWC3_CDP_CHARGER;
@@ -2835,7 +2840,7 @@ static void dwc3_ext_notify_online(void *ctx, int on)
 		power_supply_set_present(mdwc->ext_vbus_psy, on);
 
 	if (notify_otg)
-		queue_delayed_work(system_nrt_wq, &mdwc->resume_work, 0);
+		schedule_delayed_work(&mdwc->resume_work, 0);
 }
 
 #ifdef CONFIG_LGE_PM_USB_ID
@@ -2919,8 +2924,7 @@ static void dwc3_id_work(struct work_struct *w)
 		if (IS_ERR(mdwc->vadc_id_dev)) {
 			ret = PTR_ERR(mdwc->vadc_id_dev);
 			if (ret == -EPROBE_DEFER) {
-				queue_delayed_work(system_nrt_wq,
-					to_delayed_work(w),
+				schedule_delayed_work(to_delayed_work(w),
 					msecs_to_jiffies(5000));
 				return;
 			}
@@ -2980,9 +2984,9 @@ static irqreturn_t dwc3_pmic_id_irq(int irq, void *data)
 	if (mdwc->id_state != id) {
 		mdwc->id_state = id;
 #ifdef CONFIG_LGE_PM_USB_ID
-		queue_delayed_work(system_nrt_wq, &mdwc->id_work, msecs_to_jiffies(100));
+		schedule_delayed_work(&mdwc->id_work, msecs_to_jiffies(100));
 #else
-		queue_work(system_nrt_wq, &mdwc->id_work);
+		schedule_work(&mdwc->id_work);
 #endif
 	}
 
@@ -3048,7 +3052,7 @@ static void dwc3_init_adc_work(struct work_struct *w)
 #endif
 	if (IS_ERR(mdwc->adc_tm_dev)) {
 		if (PTR_ERR(mdwc->adc_tm_dev) == -EPROBE_DEFER)
-			queue_delayed_work(system_nrt_wq, to_delayed_work(w),
+			schedule_delayed_work(to_delayed_work(w),
 					msecs_to_jiffies(100));
 		else
 			mdwc->adc_tm_dev = NULL;
@@ -3297,7 +3301,7 @@ unreg_chrdev:
 
 static int dwc3_msm_probe(struct platform_device *pdev)
 {
-	struct device_node *node = pdev->dev.of_node, *dwc3_node;
+	struct device_node *node = pdev->dev.of_node, *dwc3_node, *chosen_node;
 	struct device	*dev = &pdev->dev;
 	struct dwc3_msm *mdwc;
 	struct dwc3	*dwc;
@@ -3471,6 +3475,13 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		mdwc->lpm_to_suspend_delay = 0;
 	}
 
+	chosen_node = of_find_node_by_path("/chosen");
+	if (chosen_node) {
+		mdwc->charger.factory_mode = of_property_read_bool(chosen_node,
+						"mmi,factory-cable");
+	}
+	of_node_put(chosen_node);
+
 	if (mdwc->power_collapse) {
 		/*
 		 * If present, the phy_com_reset is used in conjunction
@@ -3558,7 +3569,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 
 	if (mdwc->pmic_id_irq <= 0) {
 		/* If no PMIC ID IRQ, use ADC for ID pin detection */
-		queue_work(system_nrt_wq, &mdwc->init_adc_work.work);
+		schedule_work(&mdwc->init_adc_work.work);
 		device_create_file(&pdev->dev, &dev_attr_adc_enable);
 		mdwc->pmic_id_irq = 0;
 	}
@@ -3756,6 +3767,7 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 #ifdef CONFIG_LGE_USB_CHARGING_SPEC_VZW
 		mdwc->charger.drv_check_state_wq = &mdwc->drv_check_state_work;
 #endif
+		mdwc->charger.get_linestate = dwc3_msm_get_linestate;
 		/* Skip charger detection for simulator targets */
 		if (!mdwc->charger.skip_chg_detect) {
 			mdwc->charger.start_detection = dwc3_start_chg_det;
@@ -3829,9 +3841,9 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		mdwc->id_state = !!irq_read_line(mdwc->pmic_id_irq);
 		if (mdwc->id_state == DWC3_ID_GROUND)
 #ifdef CONFIG_LGE_PM_USB_ID
-			queue_work(system_nrt_wq, &mdwc->id_work.work);
+			schedule_work(&mdwc->id_work.work);
 #else
-			queue_work(system_nrt_wq, &mdwc->id_work);
+			schedule_work(&mdwc->id_work);
 #endif
 		local_irq_restore(flags);
 		enable_irq_wake(mdwc->pmic_id_irq);

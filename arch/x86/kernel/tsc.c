@@ -59,7 +59,7 @@ u64 native_sched_clock(void)
 	}
 
 	/* read the Time Stamp Counter: */
-	rdtscll(this_offset);
+	this_offset = rdtsc();
 
 	/* return the value in ns */
 	return __cycles_2_ns(this_offset);
@@ -77,11 +77,11 @@ unsigned long long
 sched_clock(void) __attribute__((alias("native_sched_clock")));
 #endif
 
-unsigned long long native_read_tsc(void)
+unsigned long long rdtsc(void)
 {
-	return __native_read_tsc();
+	return __rdtsc();
 }
-EXPORT_SYMBOL(native_read_tsc);
+EXPORT_SYMBOL(rdtsc);
 
 int check_tsc_unstable(void)
 {
@@ -619,7 +619,7 @@ static void set_cyc2ns_scale(unsigned long cpu_khz, int cpu)
 	scale = &per_cpu(cyc2ns, cpu);
 	offset = &per_cpu(cyc2ns_offset, cpu);
 
-	rdtscll(tsc_now);
+	tsc_now = rdtsc();
 	ns_now = __cycles_2_ns(tsc_now);
 
 	if (cpu_khz) {
@@ -824,7 +824,7 @@ static void __init check_system_tsc_reliable(void)
  * Make an educated guess if the TSC is trustworthy and synchronized
  * over all CPUs.
  */
-__cpuinit int unsynchronized_tsc(void)
+int unsynchronized_tsc(void)
 {
 	if (!cpu_has_tsc || tsc_unstable)
 		return 1;
@@ -1023,7 +1023,7 @@ void __init tsc_init(void)
  * been calibrated. This assumes that CONSTANT_TSC applies to all
  * cpus in the socket - this should be a safe assumption.
  */
-unsigned long __cpuinit calibrate_delay_is_known(void)
+unsigned long calibrate_delay_is_known(void)
 {
 	int i, cpu = smp_processor_id();
 

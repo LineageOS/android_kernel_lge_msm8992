@@ -541,11 +541,12 @@ config SRAM
 	  the genalloc API. It is supposed to be used for small on-chip SRAM
 	  areas found on many SoCs.
 
-config UID_CPUTIME
-	tristate "Per-UID cpu time statistics"
+config UID_SYS_STATS
+	tristate "Per-UID statistics"
 	depends on PROFILING
 	help
 	  Per UID based cpu time statistics exported to /proc/uid_cputime
+	  Per UID based io statistics exported to /proc/uid_io
 
 config TSIF
 	depends on ARCH_MSM8X60 || ARCH_MSM8960 || ARCH_APQ8064
@@ -645,6 +646,15 @@ config LGE_APPSPORT
 	default n
 	help
 	  This option enable device driver support for LGE Appsport.
+
+config HOB_SHARED_RAM
+	tristate "HOB RAM MMAP Client"
+	depends on OF
+	help
+	  Provide mechanism to access hob storage shared memory on apps
+	  processor. HOB - or the Hand Over Block - is the staging area for
+	  phasing data.
+	default n
 
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"

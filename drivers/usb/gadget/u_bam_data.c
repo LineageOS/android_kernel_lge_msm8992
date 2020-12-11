@@ -111,13 +111,16 @@ struct bam_data_ch_info {
 	unsigned int		rx_flow_control_disable;
 	unsigned int		rx_flow_control_enable;
 	unsigned int		rx_flow_control_triggered;
-	/* used for RNDIS/ECM network inteface based design */
-	atomic_t		is_net_interface_up;
+	/*
+	 * used for RNDIS/ECM network inteface based design
+	 * to indicate ecm/rndis pipe connect notifiaction is sent
+	 * to ecm_ipa/rndis_ipa.
+	 */
+	atomic_t		pipe_connect_notified;
 	bool			tx_req_dequeued;
 };
 
 static struct work_struct *rndis_conn_w;
-static bool is_ipa_rndis_net_on;
 
 enum u_bam_data_event_type {
 	U_BAM_DATA_DISCONNECT_E = 0,
@@ -165,7 +168,7 @@ static int bam_data_alloc_requests(struct usb_ep *ep, struct list_head *head,
 	struct bam_data_ch_info	*d = &port->data_ch;
 	struct usb_request *req;
 
-	pr_debug("%s: ep:%p head:%p num:%d cb:%p", __func__,
+	pr_debug("%s: ep:%pK head:%pK num:%d cb:%pK", __func__,
 			ep, head, num, cb);
 
 	if (d->alloc_rx_reqs) {
@@ -291,7 +294,7 @@ static void bam_data_write_done(void *p, struct sk_buff *skb)
 
 	d->pending_with_bam--;
 
-	pr_debug("%s: port:%p d:%p pbam:%u, pno:%d\n", __func__,
+	pr_debug("%s: port:%pK d:%pK pbam:%u, pno:%d\n", __func__,
 			port, d, d->pending_with_bam, port->port_num);
 
 	spin_unlock_irqrestore(&port->port_lock, flags);
@@ -525,7 +528,7 @@ static void bam_data_write_toipa(struct work_struct *w)
 
 		d->pending_with_bam++;
 
-		pr_debug("%s: port:%p d:%p pbam:%u pno:%d\n", __func__,
+		pr_debug("%s: port:%pK d:%pK pbam:%u pno:%d\n", __func__,
 				port, d, d->pending_with_bam, port->port_num);
 
 		spin_unlock_irqrestore(&port->port_lock, flags);
@@ -746,19 +749,19 @@ static void bam2bam_free_rx_skb_idle_list(struct bam_data_port *port)
  * if those APIs init counterpart is already performed.
  * MBIM: teth_bridge_connect() is NO_OPS and teth_bridge_init() is
  * being called with atomic context on cable connect, hence there is no
- * need to consider for this check. is_net_interface_up is being used
+ * need to consider for this check. pipe_connect_notified is being used
  * for RNDIS/ECM driver due to its different design with usage of
  * network interface created by IPA driver.
  */
 static void bam_data_ipa_disconnect(struct bam_data_ch_info *d)
 {
-	pr_debug("%s(): is_net_interface_up:%d\n",
-		__func__, atomic_read(&d->is_net_interface_up));
+	pr_debug("%s(): pipe_connect_notified:%d\n",
+		__func__, atomic_read(&d->pipe_connect_notified));
 	/*
-	 * Check if is_net_interface_up is set to 1, then perform disconnect
-	 * part and set is_net_interface_up to zero.
+	 * Check if pipe_connect_notified is set to 1, then perform disconnect
+	 * part and set pipe_connect_notified to zero.
 	 */
-	if (atomic_xchg(&d->is_net_interface_up, 0) == 1) {
+	if (atomic_xchg(&d->pipe_connect_notified, 0) == 1) {
 		void *priv;
 		if (d->func_type == USB_FUNC_ECM) {
 			priv = ecm_qc_get_ipa_priv();
@@ -766,7 +769,6 @@ static void bam_data_ipa_disconnect(struct bam_data_ch_info *d)
 		} else if (d->func_type == USB_FUNC_RNDIS) {
 			priv = rndis_qc_get_ipa_priv();
 			rndis_ipa_pipe_disconnect_notify(priv);
-			is_ipa_rndis_net_on = false;
 		}
 		pr_debug("%s(): net interface is disconnected.\n", __func__);
 	}
@@ -817,7 +819,7 @@ static void bam2bam_data_disconnect_work(struct work_struct *w)
 	port->is_ipa_connected = false;
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
-	pr_debug("Disconnect workqueue done (port %p)\n", port);
+	pr_debug("Disconnect workqueue done (port %pK)\n", port);
 }
 /*
  * This function configured data fifo based on index passed to get bam2bam
@@ -1136,8 +1138,8 @@ static void bam2bam_data_connect_work(struct work_struct *w)
 					__func__, ret);
 				return;
 			}
-			is_ipa_rndis_net_on = true;
 		}
+		atomic_set(&d->pipe_connect_notified, 1);
 	} else { /* transport type is USB_GADGET_XPORT_BAM2BAM */
 		/* Upadate BAM specific attributes in usb_request */
 		usb_bam_reset_complete();
@@ -1186,7 +1188,7 @@ static void bam2bam_data_connect_work(struct work_struct *w)
 		}
 	}
 
-	pr_debug("Connect workqueue done (port %p)", port);
+	pr_debug("Connect workqueue done (port %pK)", port);
 	return;
 
 disconnect_ipa:
@@ -1217,14 +1219,6 @@ void bam_data_start_rx_tx(u8 port_num)
 
 	spin_lock_irqsave(&port->port_lock, flags);
 	d = &port->data_ch;
-	/*
-	 * As this API is being called once network interface is up for
-	 * RNDIS/ECM i.e. USB driver has already notified USB cable connect
-	 * notification. Hence set this here and only clear as part of USB
-	 * cable disconnect i.e. bam_data_disconnect() API even not as part
-	 * of any error happen in this API further.
-	 */
-	atomic_set(&d->is_net_interface_up, 1);
 	if (!port->port_usb || !port->port_usb->in->driver_data
 		|| !port->port_usb->out->driver_data) {
 		pr_err("%s: Can't start tx, rx, ep not enabled", __func__);
@@ -1232,7 +1226,7 @@ void bam_data_start_rx_tx(u8 port_num)
 	}
 
 	if (!d->rx_req || !d->tx_req) {
-		pr_err("%s: No request d->rx_req=%p, d->tx_req=%p", __func__,
+		pr_err("%s: No request d->rx_req=%pK, d->tx_req=%pK", __func__,
 			d->rx_req, d->tx_req);
 		goto out;
 	}
@@ -1297,9 +1291,19 @@ static int bam2bam_data_port_alloc(int portno)
 
 void u_bam_data_start_rndis_ipa(void)
 {
-	pr_debug("%s\n", __func__);
+	int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
+					RNDIS_QC_ACTIVE_PORT);
+	struct bam_data_port *port = bam2bam_data_ports[port_num];
+	struct bam_data_ch_info *d;
 
-	if (!is_ipa_rndis_net_on)
+	pr_debug("%s\n", __func__);
+	if (!port) {
+		pr_err("%s: port is NULL", __func__);
+		return;
+	}
+
+	d = &port->data_ch;
+	if (!atomic_read(&d->pipe_connect_notified))
 		queue_work(bam_data_wq, rndis_conn_w);
 	else
 		pr_debug("%s: Transfers already started?\n", __func__);
@@ -1307,13 +1311,19 @@ void u_bam_data_start_rndis_ipa(void)
 
 void u_bam_data_stop_rndis_ipa(void)
 {
+	int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
+					RNDIS_QC_ACTIVE_PORT);
+	struct bam_data_port *port = bam2bam_data_ports[port_num];
+	struct bam_data_ch_info *d;
+
 	pr_debug("%s\n", __func__);
+	if (!port) {
+		pr_err("%s: port is NULL", __func__);
+		return;
+	}
 
-	if (is_ipa_rndis_net_on) {
-		int port_num = u_bam_data_func_to_port(USB_FUNC_RNDIS,
-							RNDIS_QC_ACTIVE_PORT);
-		struct bam_data_port *port = bam2bam_data_ports[port_num];
-
+	d = &port->data_ch;
+	if (!atomic_read(&d->pipe_connect_notified)) {
 		rndis_ipa_reset_trigger();
 		bam_data_stop_endless_tx(port);
 		if (port->is_ipa_connected)
@@ -1355,7 +1365,7 @@ void bam_data_disconnect(struct data_port *gr, enum function_type func,
 		return;
 	}
 
-	pr_debug("dev:%p port number:%d\n", gr, port_num);
+	pr_debug("dev:%pK port number:%d\n", gr, port_num);
 
 	if (!gr) {
 		pr_err("data port is null\n");
@@ -1481,7 +1491,7 @@ int bam_data_connect(struct data_port *gr, enum transport_type trans,
 		return -EINVAL;
 	}
 
-	pr_debug("dev:%p port#%d\n", gr, port_num);
+	pr_debug("dev:%pK port#%d\n", gr, port_num);
 
 	bam_name = (trans == USB_GADGET_XPORT_BAM2BAM_IPA) ?
 							IPA_P_BAM : A2_P_BAM;
@@ -1568,7 +1578,7 @@ int bam_data_connect(struct data_port *gr, enum transport_type trans,
 
 	ret = usb_ep_enable(gr->in);
 	if (ret) {
-		pr_err("usb_ep_enable failed eptype:IN ep:%p", gr->in);
+		pr_err("usb_ep_enable failed eptype:IN ep:%pK", gr->in);
 		goto exit;
 	}
 
@@ -1576,7 +1586,7 @@ int bam_data_connect(struct data_port *gr, enum transport_type trans,
 
 	ret = usb_ep_enable(gr->out);
 	if (ret) {
-		pr_err("usb_ep_enable failed eptype:OUT ep:%p", gr->out);
+		pr_err("usb_ep_enable failed eptype:OUT ep:%pK", gr->out);
 		goto disable_in_ep;
 	}
 
@@ -1846,7 +1856,7 @@ void bam_data_suspend(struct data_port *port_usb, u8 dev_port_num,
 		port_usb->in_ep_desc_backup = port_usb->in->desc;
 		port_usb->out_ep_desc_backup = port_usb->out->desc;
 
-		pr_debug("in_ep_desc_backup = %p, out_ep_desc_backup = %p",
+		pr_debug("in_ep_desc_backup = %pK, out_ep_desc_backup = %pK",
 			port_usb->in_ep_desc_backup,
 			port_usb->out_ep_desc_backup);
 
@@ -1887,7 +1897,7 @@ void bam_data_resume(struct data_port *port_usb, u8 dev_port_num,
 		port_usb->in->desc = port_usb->in_ep_desc_backup;
 		port_usb->out->desc = port_usb->out_ep_desc_backup;
 
-		pr_debug("in_ep_desc_backup = %p, out_ep_desc_backup = %p",
+		pr_debug("in_ep_desc_backup = %pK, out_ep_desc_backup = %pK",
 			port_usb->in_ep_desc_backup,
 			port_usb->out_ep_desc_backup);
 

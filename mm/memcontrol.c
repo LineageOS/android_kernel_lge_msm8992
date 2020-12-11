@@ -2565,7 +2565,7 @@ static void mem_cgroup_drain_pcp_counter(struct mem_cgroup *memcg, int cpu)
 	spin_unlock(&memcg->pcp_counter_lock);
 }
 
-static int __cpuinit memcg_cpu_hotplug_callback(struct notifier_block *nb,
+static int memcg_cpu_hotplug_callback(struct notifier_block *nb,
 					unsigned long action,
 					void *hcpu)
 {
@@ -6983,7 +6983,7 @@ static int mem_cgroup_allow_attach(struct cgroup *cgrp,
 		tcred = __task_cred(task);
 
 		if ((current != task) && !capable(CAP_SYS_ADMIN) &&
-		    cred->euid != tcred->uid && cred->euid != tcred->suid)
+		    !uid_eq(cred->euid, tcred->uid) && !uid_eq(cred->euid, tcred->suid))
 			return -EACCES;
 	}
 

@@ -48,25 +48,56 @@ static int sdcardfs_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	return err;
 }
 
-/* XXX: to support direct I/O, a_ops->direct_IO shouldn't be null.
- */
-static ssize_t sdcardfs_direct_IO(int rw, struct kiocb *iocb,
-		const struct iovec *iov, loff_t offset, unsigned long nr_segs)
+static int sdcardfs_page_mkwrite(struct vm_area_struct *vma,
+			       struct vm_fault *vmf)
 {
-	return -ENOTSUPP;
+	int err = 0;
+	struct file *file, *lower_file;
+	const struct vm_operations_struct *lower_vm_ops;
+	struct vm_area_struct lower_vma;
+
+	memcpy(&lower_vma, vma, sizeof(struct vm_area_struct));
+	file = lower_vma.vm_file;
+	lower_vm_ops = SDCARDFS_F(file)->lower_vm_ops;
+	BUG_ON(!lower_vm_ops);
+	if (!lower_vm_ops->page_mkwrite)
+		goto out;
+
+	lower_file = sdcardfs_lower_file(file);
+	/*
+	 * XXX: vm_ops->page_mkwrite may be called in parallel.
+	 * Because we have to resort to temporarily changing the
+	 * vma->vm_file to point to the lower file, a concurrent
+	 * invocation of sdcardfs_page_mkwrite could see a different
+	 * value.  In this workaround, we keep a different copy of the
+	 * vma structure in our stack, so we never expose a different
+	 * value of the vma->vm_file called to us, even temporarily.
+	 * A better fix would be to change the calling semantics of
+	 * ->page_mkwrite to take an explicit file pointer.
+	 */
+	lower_vma.vm_file = lower_file;
+	err = lower_vm_ops->page_mkwrite(&lower_vma, vmf);
+out:
+	return err;
 }
 
-/*
- * XXX: the default address_space_ops for sdcardfs is empty.  We cannot set
- * our inode->i_mapping->a_ops to NULL because too many code paths expect
- * the a_ops vector to be non-NULL.
- */
+static ssize_t sdcardfs_direct_IO(int rw, struct kiocb *iocb,
+			      const struct iovec *iov, loff_t offset,
+			      unsigned long nr_segs)
+{
+	/*
+	 * This function should never be called directly.  We need it
+	 * to exist, to get past a check in open_check_o_direct(),
+	 * which is called from do_last().
+	 */
+	return -EINVAL;
+}
+
 const struct address_space_operations sdcardfs_aops = {
-	.direct_IO		= sdcardfs_direct_IO,
-	/* empty on purpose */
+	.direct_IO	= sdcardfs_direct_IO,
 };
 
-
 const struct vm_operations_struct sdcardfs_vm_ops = {
-	.fault			= sdcardfs_fault,
+	.fault		= sdcardfs_fault,
+	.page_mkwrite	= sdcardfs_page_mkwrite,
 };

@@ -34,6 +34,7 @@
 #include "include/ipc.h"
 #include "include/path.h"
 #include "include/policy.h"
+#include "include/policy_ns.h"
 #include "include/procattr.h"
 
 /* Flag indicating whether initialization completed */
@@ -48,8 +49,8 @@ int apparmor_initialized __initdata;
  */
 static void apparmor_cred_free(struct cred *cred)
 {
-	aa_free_task_context(cred->security);
-	cred->security = NULL;
+	aa_free_task_context(cred_cxt(cred));
+	cred_cxt(cred) = NULL;
 }
 
 /*
@@ -62,7 +63,7 @@ static int apparmor_cred_alloc_blank(struct cred *cred, gfp_t gfp)
 	if (!cxt)
 		return -ENOMEM;
 
-	cred->security = cxt;
+	cred_cxt(cred) = cxt;
 	return 0;
 }
 
@@ -77,8 +78,8 @@ static int apparmor_cred_prepare(struct cred *new, const struct cred *old,
 	if (!cxt)
 		return -ENOMEM;
 
-	aa_dup_task_context(cxt, old->security);
-	new->security = cxt;
+	aa_dup_task_context(cxt, cred_cxt(old));
+	cred_cxt(new) = cxt;
 	return 0;
 }
 
@@ -87,8 +88,8 @@ static int apparmor_cred_prepare(struct cred *new, const struct cred *old,
  */
 static void apparmor_cred_transfer(struct cred *new, const struct cred *old)
 {
-	const struct aa_task_cxt *old_cxt = old->security;
-	struct aa_task_cxt *new_cxt = new->security;
+	const struct aa_task_cxt *old_cxt = cred_cxt(old);
+	struct aa_task_cxt *new_cxt = cred_cxt(new);
 
 	aa_dup_task_context(new_cxt, old_cxt);
 }
@@ -226,7 +227,7 @@ static int common_perm_rm(int op, struct path *dir,
 	struct inode *inode = dentry->d_inode;
 	struct path_cond cond = { };
 
-	if (!inode || !dir->mnt || !mediated_filesystem(inode))
+	if (!inode || !dir->mnt || !mediated_filesystem(dentry))
 		return 0;
 
 	cond.uid = inode->i_uid;
@@ -250,7 +251,7 @@ static int common_perm_create(int op, struct path *dir, struct dentry *dentry,
 {
 	struct path_cond cond = { current_fsuid(), mode };
 
-	if (!dir->mnt || !mediated_filesystem(dir->dentry->d_inode))
+	if (!dir->mnt || !mediated_filesystem(dir->dentry))
 		return 0;
 
 	return common_perm_dir_dentry(op, dir, dentry, mask, &cond);
@@ -285,7 +286,7 @@ static int apparmor_path_truncate(struct path *path)
 				  path->dentry->d_inode->i_mode
 	};
 
-	if (!path->mnt || !mediated_filesystem(path->dentry->d_inode))
+	if (!path->mnt || !mediated_filesystem(path->dentry))
 		return 0;
 
 	return common_perm(OP_TRUNC, path, MAY_WRITE | AA_MAY_META_WRITE,
@@ -305,7 +306,7 @@ static int apparmor_path_link(struct dentry *old_dentry, struct path *new_dir,
 	struct aa_profile *profile;
 	int error = 0;
 
-	if (!mediated_filesystem(old_dentry->d_inode))
+	if (!mediated_filesystem(old_dentry))
 		return 0;
 
 	profile = aa_current_profile();
@@ -320,7 +321,7 @@ static int apparmor_path_rename(struct path *old_dir, struct dentry *old_dentry,
 	struct aa_profile *profile;
 	int error = 0;
 
-	if (!mediated_filesystem(old_dentry->d_inode))
+	if (!mediated_filesystem(old_dentry))
 		return 0;
 
 	profile = aa_current_profile();
@@ -346,7 +347,7 @@ static int apparmor_path_rename(struct path *old_dir, struct dentry *old_dentry,
 
 static int apparmor_path_chmod(struct path *path, umode_t mode)
 {
-	if (!mediated_filesystem(path->dentry->d_inode))
+	if (!mediated_filesystem(path->dentry))
 		return 0;
 
 	return common_perm_mnt_dentry(OP_CHMOD, path->mnt, path->dentry, AA_MAY_CHMOD);
@@ -358,7 +359,7 @@ static int apparmor_path_chown(struct path *path, kuid_t uid, kgid_t gid)
 				   path->dentry->d_inode->i_mode
 	};
 
-	if (!mediated_filesystem(path->dentry->d_inode))
+	if (!mediated_filesystem(path->dentry))
 		return 0;
 
 	return common_perm(OP_CHOWN, path, AA_MAY_CHOWN, &cond);
@@ -366,7 +367,7 @@ static int apparmor_path_chown(struct path *path, kuid_t uid, kgid_t gid)
 
 static int apparmor_inode_getattr(struct vfsmount *mnt, struct dentry *dentry)
 {
-	if (!mediated_filesystem(dentry->d_inode))
+	if (!mediated_filesystem(dentry))
 		return 0;
 
 	return common_perm_mnt_dentry(OP_GETATTR, mnt, dentry,
@@ -379,7 +380,7 @@ static int apparmor_file_open(struct file *file, const struct cred *cred)
 	struct aa_profile *profile;
 	int error = 0;
 
-	if (!mediated_filesystem(file_inode(file)))
+	if (!mediated_filesystem(file->f_path.dentry))
 		return 0;
 
 	/* If in exec, permission is handled by bprm hooks.
@@ -432,7 +433,7 @@ static int common_file_perm(int op, struct file *file, u32 mask)
 	BUG_ON(!fprofile);
 
 	if (!file->f_path.mnt ||
-	    !mediated_filesystem(file_inode(file)))
+	    !mediated_filesystem(file->f_path.dentry))
 		return 0;
 
 	profile = __aa_current_profile();
@@ -469,7 +470,6 @@ static int apparmor_file_lock(struct file *file, unsigned int cmd)
 static int common_mmap(int op, struct file *file, unsigned long prot,
 		       unsigned long flags)
 {
-	struct dentry *dentry;
 	int mask = 0;
 
 	if (!file || !file->f_security)
@@ -486,7 +486,6 @@ static int common_mmap(int op, struct file *file, unsigned long prot,
 	if (prot & PROT_EXEC)
 		mask |= AA_EXEC_MMAP;
 
-	dentry = file->f_path.dentry;
 	return common_file_perm(op, file, mask);
 }
 
@@ -507,24 +506,24 @@ static int apparmor_getprocattr(struct task_struct *task, char *name,
 				char **value)
 {
 	int error = -ENOENT;
-	struct aa_profile *profile;
 	/* released below */
 	const struct cred *cred = get_task_cred(task);
-	struct aa_task_cxt *cxt = cred->security;
-	profile = aa_cred_profile(cred);
+	struct aa_task_cxt *cxt = cred_cxt(cred);
+	struct aa_profile *profile = NULL;
 
 	if (strcmp(name, "current") == 0)
-		error = aa_getprocattr(aa_newest_version(cxt->profile),
-				       value);
+		profile = aa_get_newest_profile(cxt->profile);
 	else if (strcmp(name, "prev") == 0  && cxt->previous)
-		error = aa_getprocattr(aa_newest_version(cxt->previous),
-				       value);
+		profile = aa_get_newest_profile(cxt->previous);
 	else if (strcmp(name, "exec") == 0 && cxt->onexec)
-		error = aa_getprocattr(aa_newest_version(cxt->onexec),
-				       value);
+		profile = aa_get_newest_profile(cxt->onexec);
 	else
 		error = -EINVAL;
 
+	if (profile)
+		error = aa_getprocattr(profile, value);
+
+	aa_put_profile(profile);
 	put_cred(cred);
 
 	return error;
@@ -576,8 +575,6 @@ static int apparmor_setprocattr(struct task_struct *task, char *name,
 		} else if (strcmp(command, "permprofile") == 0) {
 			error = aa_setprocattr_changeprofile(args, !AA_ONEXEC,
 							     AA_DO_TEST);
-		} else if (strcmp(command, "permipc") == 0) {
-			error = aa_setprocattr_permipc(args);
 		} else {
 			struct common_audit_data sa;
 			struct apparmor_audit_data aad = {0,};
@@ -666,7 +663,7 @@ static struct security_operations apparmor_ops = {
 static int param_set_aabool(const char *val, const struct kernel_param *kp);
 static int param_get_aabool(char *buffer, const struct kernel_param *kp);
 #define param_check_aabool param_check_bool
-static struct kernel_param_ops param_ops_aabool = {
+static const struct kernel_param_ops param_ops_aabool = {
 	.set = param_set_aabool,
 	.get = param_get_aabool
 };
@@ -674,7 +671,7 @@ static struct kernel_param_ops param_ops_aabool = {
 static int param_set_aauint(const char *val, const struct kernel_param *kp);
 static int param_get_aauint(char *buffer, const struct kernel_param *kp);
 #define param_check_aauint param_check_uint
-static struct kernel_param_ops param_ops_aauint = {
+static const struct kernel_param_ops param_ops_aauint = {
 	.set = param_set_aauint,
 	.get = param_get_aauint
 };
@@ -682,7 +679,7 @@ static struct kernel_param_ops param_ops_aauint = {
 static int param_set_aalockpolicy(const char *val, const struct kernel_param *kp);
 static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp);
 #define param_check_aalockpolicy param_check_bool
-static struct kernel_param_ops param_ops_aalockpolicy = {
+static const struct kernel_param_ops param_ops_aalockpolicy = {
 	.set = param_set_aalockpolicy,
 	.get = param_get_aalockpolicy
 };
@@ -701,6 +698,10 @@ static int param_get_mode(char *buffer, struct kernel_param *kp);
 enum profile_mode aa_g_profile_mode = APPARMOR_ENFORCE;
 module_param_call(mode, param_set_mode, param_get_mode,
 		  &aa_g_profile_mode, S_IRUSR | S_IWUSR);
+
+/* whether policy verification hashing is enabled */
+bool aa_g_hash_policy = CONFIG_SECURITY_APPARMOR_HASH_DEFAULT;
+module_param_named(hash_policy, aa_g_hash_policy, aabool, S_IRUSR | S_IWUSR);
 
 /* Debug mode */
 bool aa_g_debug;
@@ -759,51 +760,49 @@ __setup("apparmor=", apparmor_enabled_setup);
 /* set global flag turning off the ability to load policy */
 static int param_set_aalockpolicy(const char *val, const struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_admin_capable())
 		return -EPERM;
-	if (aa_g_lock_policy)
-		return -EACCES;
 	return param_set_bool(val, kp);
 }
 
 static int param_get_aalockpolicy(char *buffer, const struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_view_capable())
 		return -EPERM;
 	return param_get_bool(buffer, kp);
 }
 
 static int param_set_aabool(const char *val, const struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_admin_capable())
 		return -EPERM;
 	return param_set_bool(val, kp);
 }
 
 static int param_get_aabool(char *buffer, const struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_view_capable())
 		return -EPERM;
 	return param_get_bool(buffer, kp);
 }
 
 static int param_set_aauint(const char *val, const struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_admin_capable())
 		return -EPERM;
 	return param_set_uint(val, kp);
 }
 
 static int param_get_aauint(char *buffer, const struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_view_capable())
 		return -EPERM;
 	return param_get_uint(buffer, kp);
 }
 
 static int param_get_audit(char *buffer, struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_view_capable())
 		return -EPERM;
 
 	if (!apparmor_enabled)
@@ -815,7 +814,7 @@ static int param_get_audit(char *buffer, struct kernel_param *kp)
 static int param_set_audit(const char *val, struct kernel_param *kp)
 {
 	int i;
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_admin_capable())
 		return -EPERM;
 
 	if (!apparmor_enabled)
@@ -836,19 +835,19 @@ static int param_set_audit(const char *val, struct kernel_param *kp)
 
 static int param_get_mode(char *buffer, struct kernel_param *kp)
 {
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_admin_capable())
 		return -EPERM;
 
 	if (!apparmor_enabled)
 		return -EINVAL;
 
-	return sprintf(buffer, "%s", profile_mode_names[aa_g_profile_mode]);
+	return sprintf(buffer, "%s", aa_profile_mode_names[aa_g_profile_mode]);
 }
 
 static int param_set_mode(const char *val, struct kernel_param *kp)
 {
 	int i;
-	if (!capable(CAP_MAC_ADMIN))
+	if (!policy_admin_capable())
 		return -EPERM;
 
 	if (!apparmor_enabled)
@@ -857,8 +856,8 @@ static int param_set_mode(const char *val, struct kernel_param *kp)
 	if (!val)
 		return -EINVAL;
 
-	for (i = 0; i < APPARMOR_NAMES_MAX_INDEX; i++) {
-		if (strcmp(val, profile_mode_names[i]) == 0) {
+	for (i = 0; i < APPARMOR_MODE_NAMES_MAX_INDEX; i++) {
+		if (strcmp(val, aa_profile_mode_names[i]) == 0) {
 			aa_g_profile_mode = i;
 			return 0;
 		}
@@ -886,7 +885,7 @@ static int __init set_init_cxt(void)
 		return -ENOMEM;
 
 	cxt->profile = aa_get_profile(root_ns->unconfined);
-	cred->security = cxt;
+	cred_cxt(cred) = cxt;
 
 	return 0;
 }
@@ -915,8 +914,11 @@ static int __init apparmor_init(void)
 
 	error = register_security(&apparmor_ops);
 	if (error) {
+		struct cred *cred = (struct cred *)current->real_cred;
+		aa_free_task_context(cred_cxt(cred));
+		cred_cxt(cred) = NULL;
 		AA_ERROR("Unable to register AppArmor\n");
-		goto set_init_cxt_out;
+		goto register_security_out;
 	}
 
 	/* Report that AppArmor successfully initialized */
@@ -929,9 +931,6 @@ static int __init apparmor_init(void)
 		aa_info_message("AppArmor initialized");
 
 	return error;
-
-set_init_cxt_out:
-	aa_free_task_context(current->real_cred->security);
 
 register_security_out:
 	aa_free_root_ns();

@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2014, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -25,6 +25,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/mm.h>
 #include <linux/dma-attrs.h>
+#include <linux/kthread.h>
 
 /* The number of memstore arrays limits the number of contexts allowed.
  * If more contexts are needed, update multiple for MEMSTORE_SIZE
@@ -95,6 +96,8 @@ struct kgsl_driver {
 		unsigned int mapped_max;
 	} stats;
 	unsigned int full_cache_threshold;
+	struct kthread_worker worker;
+	struct task_struct *worker_thread;
 };
 
 extern struct kgsl_driver kgsl_driver;
@@ -142,6 +145,7 @@ struct kgsl_memdesc {
 	unsigned int gpuaddr;
 	phys_addr_t physaddr;
 	size_t size;
+	uint64_t mapsize;
 	unsigned int priv; /* Internal flags and settings */
 	struct scatterlist *sg;
 #ifdef CONFIG_LGE_KGSL_OFFSET_SEARCH
@@ -225,7 +229,7 @@ struct kgsl_event {
 	void *priv;
 	struct list_head node;
 	unsigned int created;
-	struct work_struct work;
+	struct kthread_work work;
 	int result;
 	struct kgsl_event_group *group;
 };

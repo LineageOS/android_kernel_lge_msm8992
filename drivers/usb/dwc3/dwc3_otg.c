@@ -18,6 +18,7 @@
 #include <linux/usb/hcd.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
+#include <linux/usb/msm_hsusb.h>
 
 #include "core.h"
 #include "dwc3_otg.h"
@@ -32,6 +33,7 @@
 #else
 #define MAX_INVALID_CHRGR_RETRY 3
 #endif
+#define CHG_RECHECK_DELAY	(jiffies + msecs_to_jiffies(2000))
 static int max_chgr_retry_count = MAX_INVALID_CHRGR_RETRY;
 module_param(max_chgr_retry_count, int, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(max_chgr_retry_count, "Max invalid charger retry count");
@@ -261,13 +263,13 @@ static int dwc3_otg_set_peripheral(struct usb_otg *otg,
 		dev_dbg(otg->phy->dev, "%s: set gadget %s\n",
 					__func__, gadget->name);
 		otg->gadget = gadget;
-		queue_delayed_work(system_nrt_wq, &dotg->sm_work, 0);
+		schedule_delayed_work(&dotg->sm_work, 0);
 	} else {
 		if (otg->phy->state == OTG_STATE_B_PERIPHERAL) {
 			dwc3_otg_start_peripheral(otg, 0);
 			otg->gadget = NULL;
 			otg->phy->state = OTG_STATE_UNDEFINED;
-			queue_delayed_work(system_nrt_wq, &dotg->sm_work, 0);
+			schedule_delayed_work(&dotg->sm_work, 0);
 		} else {
 			otg->gadget = NULL;
 		}
@@ -296,8 +298,7 @@ static int dwc3_otg_set_suspend(struct usb_phy *phy, int suspend)
 
 	if (suspend) {
 		set_bit(DWC3_OTG_SUSPEND, &dotg->inputs);
-		queue_delayed_work(system_nrt_wq,
-			&dotg->sm_work,
+		schedule_delayed_work(&dotg->sm_work,
 			msecs_to_jiffies(lpm_after_suspend_delay));
 	} else {
 		clear_bit(DWC3_OTG_SUSPEND, &dotg->inputs);
@@ -317,12 +318,13 @@ static void dwc3_ext_chg_det_done(struct usb_otg *otg, struct dwc3_charger *chg)
 {
 	struct dwc3_otg *dotg = container_of(otg, struct dwc3_otg, otg);
 
+	dotg->notify_psy = true;
 	/*
 	 * Ignore chg_detection notification if BSV has gone off by this time.
 	 * STOP chg_det as part of !BSV handling would reset the chg_det flags
 	 */
 	if (test_bit(B_SESS_VLD, &dotg->inputs))
-		queue_delayed_work(system_nrt_wq, &dotg->sm_work, 0);
+		schedule_delayed_work(&dotg->sm_work, 0);
 }
 
 /**
@@ -409,15 +411,14 @@ static void dwc3_ext_event_notify(struct usb_otg *otg,
 		if (!init) {
 			init = true;
 			if (!work_busy(&dotg->sm_work.work))
-				queue_delayed_work(system_nrt_wq,
-							&dotg->sm_work, 0);
+				schedule_delayed_work(&dotg->sm_work, 0);
 
 			complete(&dotg->dwc3_xcvr_vbus_init);
 			dev_dbg(phy->dev, "XCVR: BSV init complete\n");
 			return;
 		}
 
-		queue_delayed_work(system_nrt_wq, &dotg->sm_work, 0);
+		schedule_delayed_work(&dotg->sm_work, 0);
 	}
 #ifdef CONFIG_LGE_USB_MAXIM_EVP
 	else if (event == DWC3_EVENT_EVP_DETECT) {
@@ -429,7 +430,7 @@ static void dwc3_ext_event_notify(struct usb_otg *otg,
 		if (ext_xceiv->evp_detect) {
 			dev_info(phy->dev, "XCVR: EVP detection start.\n");
 			dotg->otg.gadget->evp_sts |= EVP_STS_DETGO;
-			queue_delayed_work(system_nrt_wq, &dotg->sm_work, 0);
+			schedule_delayed_work(&dotg->sm_work, 0);
 		} else {
 			dev_info(phy->dev, "XCVR: QC2.0 detected, dwc3 into LPM.\n");
 			dotg->otg.gadget->evp_sts |= EVP_STS_QC20;
@@ -499,7 +500,7 @@ static int dwc3_otg_evp_connect(struct usb_phy *phy, bool connect)
 	struct dwc3_otg *dotg = container_of(phy->otg, struct dwc3_otg, otg);
 
 	if (connect)
-		queue_delayed_work(system_nrt_wq, &dotg->evp_connect_work, 0);
+		schedule_delayed_work(&dotg->evp_connect_work, 0);
 	else
 		cancel_delayed_work(&dotg->evp_connect_work);
 
@@ -508,7 +509,7 @@ static int dwc3_otg_evp_connect(struct usb_phy *phy, bool connect)
 #endif
 static int dwc3_otg_set_power(struct usb_phy *phy, unsigned mA)
 {
-	static int power_supply_type;
+	enum power_supply_property power_supply_type;
 	struct dwc3_otg *dotg = container_of(phy->otg, struct dwc3_otg, otg);
 
 	if (!dotg->psy || !dotg->charger) {
@@ -523,6 +524,14 @@ static int dwc3_otg_set_power(struct usb_phy *phy, unsigned mA)
 	if (dotg->charger->chg_type == DWC3_SDP_CHARGER ||
 			dotg->charger->chg_type == DWC3_FLOATED_CHARGER)
 #else
+	if (!dotg->notify_psy &&
+		dotg->charger->chg_type != DWC3_INVALID_CHARGER) {
+		dev_dbg(phy->dev,
+			"SKIP setting power supply type again,chg_type = %d\n",
+			dotg->charger->chg_type);
+		goto skip_psy_type;
+	}
+
 	if (dotg->charger->chg_type == DWC3_SDP_CHARGER)
 #endif
 		power_supply_type = POWER_SUPPLY_TYPE_USB;
@@ -535,10 +544,15 @@ static int dwc3_otg_set_power(struct usb_phy *phy, unsigned mA)
 		power_supply_type = POWER_SUPPLY_TYPE_UNKNOWN;
 
 	power_supply_set_supply_type(dotg->psy, power_supply_type);
+	dotg->notify_psy = false;
 
 	#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_I2C_RMI4)
 	update_status(1, dotg->charger->chg_type);
 	#endif
+
+#ifndef CONFIG_LGE_PM_USB_ID
+skip_psy_type:
+#endif
 
 	if (dotg->charger->chg_type == DWC3_CDP_CHARGER)
 		mA = DWC3_IDEV_CHG_MAX;
@@ -563,20 +577,19 @@ static int dwc3_otg_set_power(struct usb_phy *phy, unsigned mA)
 
 	dev_info(phy->dev, "Avail curr from USB = %u\n", mA);
 
-	if (dotg->charger->max_power <= 2 && mA > 2) {
-		/* Enable charging */
-		if (power_supply_set_online(dotg->psy, true))
-			goto psy_error;
-		if (power_supply_set_current_limit(dotg->psy, 1000*mA))
-			goto psy_error;
-	} else if (dotg->charger->max_power > 0 && (mA == 0 || mA == 2)) {
+	if (dotg->charger->max_power > 0 && (mA == 0 || mA == 2)) {
 		/* Disable charging */
 		if (power_supply_set_online(dotg->psy, false))
 			goto psy_error;
-		/* Set max current limit in uA */
-		if (power_supply_set_current_limit(dotg->psy, 1000*mA))
+	} else {
+		/* Enable charging */
+		if (power_supply_set_online(dotg->psy, true))
 			goto psy_error;
 	}
+
+	/* Set max current limit in uA */
+	if (power_supply_set_current_limit(dotg->psy, 1000*mA))
+		goto psy_error;
 
 	power_supply_changed(dotg->psy);
 	dotg->charger->max_power = mA;
@@ -654,13 +667,16 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 		if (!test_bit(ID, &dotg->inputs)) {
 			dev_dbg(phy->dev, "!id\n");
 			phy->state = OTG_STATE_A_IDLE;
+			dotg->notify_psy = true;
 			work = 1;
 		} else if (test_bit(B_SESS_VLD, &dotg->inputs)) {
 			dev_dbg(phy->dev, "b_sess_vld\n");
 			phy->state = OTG_STATE_B_IDLE;
+			dotg->notify_psy = true;
 			work = 1;
 		} else {
 			phy->state = OTG_STATE_B_IDLE;
+			dotg->notify_psy = true;
 			dev_dbg(phy->dev, "No device, trying to suspend\n");
 			dbg_event(0xFF, "UNDEF put", 0);
 			pm_runtime_put_sync(phy->dev);
@@ -671,6 +687,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 		if (!test_bit(ID, &dotg->inputs)) {
 			dev_dbg(phy->dev, "!id\n");
 			phy->state = OTG_STATE_A_IDLE;
+			dotg->notify_psy = true;
 			work = 1;
 			dotg->charger_retry_count = 0;
 			if (charger) {
@@ -699,6 +716,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					if (dotg->otg.gadget->evp_sts & EVP_STS_DETGO) {
 						dwc3_otg_start_peripheral(&dotg->otg, 1);
 						phy->state = OTG_STATE_B_PERIPHERAL;
+						dotg->notify_psy = true;
 						work = 1;
 					} else {
 						dwc3_otg_set_power(phy,
@@ -707,10 +725,16 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					}
 					break;
 #endif
-				case DWC3_PROPRIETARY_CHARGER:
 					dev_dbg(phy->dev, "lpm, DCP charger\n");
 					dwc3_otg_set_power(phy,
-							DWC3_IDEV_CHG_MAX);
+							DWC3_IDEV_CHG_DCP);
+					dbg_event(0xFF, "DCP put", 0);
+					pm_runtime_put_sync(phy->dev);
+					break;
+				case DWC3_PROPRIETARY_CHARGER:
+					dev_dbg(phy->dev, "lpm, PROP charger\n");
+					dwc3_otg_set_power(phy,
+							DWC3_IDEV_CHG_PROP);
 					dbg_event(0xFF, "PROPCHG put", 0);
 					pm_runtime_put_sync(phy->dev);
 					break;
@@ -720,6 +744,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					dwc3_otg_start_peripheral(&dotg->otg,
 									1);
 					phy->state = OTG_STATE_B_PERIPHERAL;
+					dotg->notify_psy = true;
 					work = 1;
 					break;
 				case DWC3_SDP_CHARGER:
@@ -736,9 +761,22 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					dwc3_otg_set_power(phy,
 								100);
 #endif
+					if (dotg->otg.gadget &&
+						usb_gadget_get_charge_enabled(
+							dotg->otg.gadget))
+						dwc3_otg_set_power(phy,
+							DWC3_IDEV_CHG_MIN);
 					dwc3_otg_start_peripheral(&dotg->otg,
 									1);
 					phy->state = OTG_STATE_B_PERIPHERAL;
+					dotg->notify_psy = true;
+					dotg->falsesdp_retry_count = 0;
+					if (dotg->charger &&
+						!dotg->charger->factory_mode) {
+						mod_timer(
+							&dotg->chg_check_timer,
+							CHG_RECHECK_DELAY);
+					}
 					work = 1;
 					break;
 				case DWC3_FLOATED_CHARGER:
@@ -758,14 +796,16 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 						max_chgr_retry_count) {
 #ifdef CONFIG_LGE_PM_USB_ID
 #ifdef CONFIG_LGE_USB_CHARGING_SPEC_VZW
-						queue_delayed_work(system_nrt_wq, dotg->charger->drv_check_state_wq, 0);
+						schedule_delayed_work(dotg->charger->drv_check_state_wq, 0);
 						dwc3_otg_start_peripheral(&dotg->otg, 1);
 						phy->state = OTG_STATE_B_PERIPHERAL;
+						dotg->notify_psy = true;
 						work = 1;
 #else
 						dwc3_otg_set_power(phy, 100);
 						dwc3_otg_start_peripheral(&dotg->otg, 1);
 						phy->state = OTG_STATE_B_PERIPHERAL;
+						dotg->notify_psy = true;
 						work = 1;
 #endif
 #else
@@ -789,6 +829,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 				 * and start peripheral
 				 */
 				phy->state = OTG_STATE_B_PERIPHERAL;
+				dotg->notify_psy = true;
 				if (dwc3_otg_start_peripheral(&dotg->otg, 1)) {
 					/*
 					 * Probably set_peripheral not called
@@ -798,6 +839,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 					dev_err(phy->dev, "enter lpm as\n"
 						"unable to start B-device\n");
 					phy->state = OTG_STATE_UNDEFINED;
+					dotg->notify_psy = true;
 					dbg_event(0xFF, "NoCH put", 0);
 					pm_runtime_put_sync(phy->dev);
 					return;
@@ -826,14 +868,28 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 		break;
 
 	case OTG_STATE_B_PERIPHERAL:
-		if (!test_bit(B_SESS_VLD, &dotg->inputs) ||
+		if (test_bit(B_SESS_VLD, &dotg->inputs) &&
+				test_bit(B_FALSE_SDP, &dotg->inputs)) {
+			dev_dbg(phy->dev, "B_FALSE_SDP - TA Charger ?\n");
+			dwc3_otg_start_peripheral(&dotg->otg, 0);
+			phy->state = OTG_STATE_B_IDLE;
+			dotg->notify_psy = true;
+			if (charger)
+				charger->chg_type = DWC3_PROPRIETARY_CHARGER;
+			clear_bit(B_FALSE_SDP, &dotg->inputs);
+			work = 1;
+		} else if (!test_bit(B_SESS_VLD, &dotg->inputs) ||
 				!test_bit(ID, &dotg->inputs)) {
 			dev_dbg(phy->dev, "!id || !bsv\n");
+			del_timer_sync(&dotg->chg_check_timer);
+			dotg->falsesdp_retry_count = 0;
+			clear_bit(B_FALSE_SDP, &dotg->inputs);
 			dwc3_otg_start_peripheral(&dotg->otg, 0);
 #ifdef CONFIG_LGE_USB_MAXIM_EVP
 			dotg->otg.gadget->evp_sts = 0;
 #endif
 			phy->state = OTG_STATE_B_IDLE;
+			dotg->notify_psy = true;
 			if (charger)
 				charger->chg_type = DWC3_INVALID_CHARGER;
 			work = 1;
@@ -855,10 +911,12 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 		if (test_bit(ID, &dotg->inputs)) {
 			dev_dbg(phy->dev, "id\n");
 			phy->state = OTG_STATE_B_IDLE;
+			dotg->notify_psy = true;
 			dotg->vbus_retry_count = 0;
 			work = 1;
 		} else {
 			phy->state = OTG_STATE_A_HOST;
+			dotg->notify_psy = true;
 			ret = dwc3_otg_start_host(&dotg->otg, 1);
 			if ((ret == -EPROBE_DEFER) &&
 						dotg->vbus_retry_count < 3) {
@@ -867,6 +925,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 				 * not up yet. Will try to start host after 1sec
 				 */
 				phy->state = OTG_STATE_A_IDLE;
+				dotg->notify_psy = true;
 				dev_dbg(phy->dev, "Unable to get vbus regulator. Retrying...\n");
 				delay = VBUS_REG_CHECK_DELAY;
 				work = 1;
@@ -875,6 +934,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 				dev_dbg(phy->dev, "enter lpm as\n"
 					"unable to start A-device\n");
 				phy->state = OTG_STATE_A_IDLE;
+				dotg->notify_psy = true;
 				dbg_event(0xFF, "AIDL put", 0);
 				pm_runtime_put_sync(phy->dev);
 				return;
@@ -896,6 +956,7 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 			dev_dbg(phy->dev, "id\n");
 			dwc3_otg_start_host(&dotg->otg, 0);
 			phy->state = OTG_STATE_B_IDLE;
+			dotg->notify_psy = true;
 			dotg->vbus_retry_count = 0;
 			work = 1;
 		} else {
@@ -912,7 +973,38 @@ static void dwc3_otg_sm_work(struct work_struct *w)
 	}
 
 	if (work)
-		queue_delayed_work(system_nrt_wq, &dotg->sm_work, delay);
+		schedule_delayed_work(&dotg->sm_work, delay);
+}
+
+static void dwc3_otg_chg_check_timer_func(unsigned long data)
+{
+	struct dwc3_otg *dotg = (struct dwc3_otg *) data;
+	struct usb_phy *phy = dotg->otg.phy;
+
+	if (pm_runtime_status_suspended(phy->dev) ||
+		!test_bit(B_SESS_VLD, &dotg->inputs) ||
+		phy->state != OTG_STATE_B_PERIPHERAL ||
+		phy->otg->gadget->speed != USB_SPEED_UNKNOWN) {
+		dev_info(phy->dev, "Nothing to do in chg_check_timer\n");
+		return;
+	}
+
+	if (!dotg->charger || !dotg->charger->get_linestate)
+		return;
+
+	if (dotg->charger->get_linestate(dotg->charger) == DWC3_LS) {
+		dev_info(phy->dev, "DCP is detected as SDP\n");
+		set_bit(B_FALSE_SDP, &dotg->inputs);
+		schedule_delayed_work(&dotg->sm_work, 0);
+		return;
+	}
+	if (dotg->falsesdp_retry_count <  max_chgr_retry_count)
+		dotg->falsesdp_retry_count++;
+
+	if (dotg->falsesdp_retry_count == max_chgr_retry_count)
+		dwc3_otg_set_power(phy, DWC3_IDEV_CHG_MIN);
+	else
+		mod_timer(&dotg->chg_check_timer, CHG_RECHECK_DELAY);
 }
 
 /**
@@ -962,6 +1054,8 @@ int dwc3_otg_init(struct dwc3 *dwc)
 #ifdef CONFIG_LGE_USB_MAXIM_EVP
 	INIT_DELAYED_WORK(&dotg->evp_connect_work, dwc3_otg_evp_connect_work);
 #endif
+	setup_timer(&dotg->chg_check_timer, dwc3_otg_chg_check_timer_func,
+					(unsigned long) dotg);
 
 	dbg_event(0xFF, "OTGInit get", 0);
 	pm_runtime_get(dwc->dev);

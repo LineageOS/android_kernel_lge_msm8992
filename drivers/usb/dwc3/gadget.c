@@ -335,7 +335,7 @@ void dwc3_gadget_giveback(struct dwc3_ep *dep, struct dwc3_request *req,
 		usb_gadget_unmap_request(&dwc->gadget, &req->request,
 				req->direction);
 
-	dev_dbg(dwc->dev, "request %p from %s completed %d/%d ===> %d\n",
+	dev_dbg(dwc->dev, "request %pK from %s completed %d/%d ===> %d\n",
 			req, dep->name, req->request.actual,
 			req->request.length, status);
 
@@ -756,7 +756,7 @@ static int dwc3_gadget_ep_enable(struct usb_ep *ep,
 	int				ret;
 
 	if (!ep || !desc || desc->bDescriptorType != USB_DT_ENDPOINT) {
-		pr_debug("dwc3: invalid parameters. ep=%p, desc=%p, DT=%d\n",
+		pr_debug("dwc3: invalid parameters. ep=%pK, desc=%pK, DT=%d\n",
 			ep, desc, desc ? desc->bDescriptorType : 0);
 		return -EINVAL;
 	}
@@ -878,7 +878,7 @@ static void dwc3_prepare_one_trb(struct dwc3_ep *dep,
 	bool			zlp_appended = false;
 	unsigned		rlen;
 
-	dev_vdbg(dwc->dev, "%s: req %p dma %08llx length %d%s%s\n",
+	dev_vdbg(dwc->dev, "%s: req %pK dma %08llx length %d%s%s\n",
 			dep->name, req, (unsigned long long) dma,
 			length, last ? " last" : "",
 			chain ? " chain" : "");
@@ -1359,7 +1359,7 @@ static int __dwc3_gadget_ep_queue(struct dwc3_ep *dep, struct dwc3_request *req)
 
 	if (req->request.status == -EINPROGRESS) {
 		ret = -EBUSY;
-		dev_err(dwc->dev, "%s: %p request already in queue",
+		dev_err(dwc->dev, "%s: %pK request already in queue",
 					dep->name, req);
 		return ret;
 	}
@@ -1489,7 +1489,7 @@ static int dwc3_gadget_ep_queue(struct usb_ep *ep, struct usb_request *request,
 
 	if (!dep->endpoint.desc) {
 		spin_unlock_irqrestore(&dwc->lock, flags);
-		dev_dbg(dwc->dev, "trying to queue request %p to disabled %s\n",
+		dev_dbg(dwc->dev, "trying to queue request %pK to disabled %s\n",
 				request, ep->name);
 		return -ESHUTDOWN;
 	}
@@ -1501,7 +1501,7 @@ static int dwc3_gadget_ep_queue(struct usb_ep *ep, struct usb_request *request,
 		return dwc->gadget.remote_wakeup ? -EAGAIN : -ENOTSUPP;
 	}
 
-	dev_vdbg(dwc->dev, "queing request %p to %s length %d\n",
+	dev_vdbg(dwc->dev, "queing request %pK to %s length %d\n",
 			request, ep->name, request->length);
 
 	WARN(!dep->direction && (request->length % ep->desc->wMaxPacketSize),
@@ -1548,7 +1548,7 @@ static int dwc3_gadget_ep_dequeue(struct usb_ep *ep,
 			dwc3_stop_active_transfer(dwc, dep->number);
 			goto out1;
 		}
-		dev_err(dwc->dev, "request %p was not queued to %s\n",
+		dev_err(dwc->dev, "request %pK was not queued to %s\n",
 				request, ep->name);
 		ret = -EINVAL;
 		goto out0;
@@ -1922,7 +1922,7 @@ static int dwc3_gadget_run_stop(struct dwc3 *dwc, int is_on)
 #ifdef CONFIG_LGE_USB_MAXIM_EVP
 		pr_debug("%s Queue DCP check work! %u\n", __func__, dwc->gadget.evp_sts);
 		if (dwc->gadget.evp_sts & EVP_STS_DCP)
-			queue_delayed_work(system_nrt_wq, &dwc->dcp_check_work,
+			schedule_delayed_work(&dwc->dcp_check_work,
 					(msecs_to_jiffies(1500)));
 #endif
 	} else {
@@ -2337,6 +2337,27 @@ static int dwc3_gadget_evp_connect(struct usb_gadget *g, bool connect)
 }
 #endif
 
+static int dwc3_gadget_vbus_enable_charge(struct usb_gadget *g, int is_on)
+{
+	struct dwc3		*dwc = gadget_to_dwc(g);
+	unsigned long flags;
+
+	spin_lock_irqsave(&dwc->lock, flags);
+	dwc->charge_enabled = !!is_on;
+	if (dwc->vbus_active && dwc->charge_enabled)
+		dwc3_gadget_vbus_draw(g, DWC3_IDEV_CHG_MIN);
+	spin_unlock_irqrestore(&dwc->lock, flags);
+
+	return 0;
+}
+
+static int dwc3_gadget_vbus_is_charge_enabled(struct usb_gadget *g)
+{
+	struct dwc3		*dwc = gadget_to_dwc(g);
+
+	return !!dwc->charge_enabled;
+}
+
 static const struct usb_gadget_ops dwc3_gadget_ops = {
 	.get_frame		= dwc3_gadget_get_frame,
 	.wakeup			= dwc3_gadget_wakeup,
@@ -2351,6 +2372,8 @@ static const struct usb_gadget_ops dwc3_gadget_ops = {
 	.gadget_func_io		= dwc3_gadget_func_io,
 	.evp_connect		= dwc3_gadget_evp_connect,
 #endif
+	.vbus_set_charge_enabled = dwc3_gadget_vbus_enable_charge,
+	.vbus_get_charge_enabled = dwc3_gadget_vbus_is_charge_enabled,
 };
 
 /* -------------------------------------------------------------------------- */
@@ -2544,7 +2567,7 @@ static int __dwc3_cleanup_done_trbs(struct dwc3 *dwc, struct dwc3_ep *dep,
 		 * would help. Lets hope that if this occurs, someone
 		 * fixes the root cause instead of looking away :)
 		 */
-		dev_err(dwc->dev, "%s's TRB (%p) still owned by HW\n",
+		dev_err(dwc->dev, "%s's TRB (%pK) still owned by HW\n",
 				dep->name, trb);
 	count = trb->size & DWC3_TRB_SIZE_MASK;
 

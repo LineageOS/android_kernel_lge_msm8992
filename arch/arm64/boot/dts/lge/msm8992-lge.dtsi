@@ -38,6 +38,22 @@
 			label = "crash_fb_mem";
 		};
 	};
+	firmware: firmware {
+		android {
+			compatible = "android,firmware";
+			fstab {
+				compatible = "android,fstab";
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/soc.0/f9824900.sdhci/by-name/system";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1,noatime,user_xattr,discard";
+					fsmgr_flags = "wait,check";
+					status = "ok";
+				};
+			};
+		};
+	};
 };
 
 &soc {
@@ -230,6 +246,11 @@
 			"testmode", "pmrst", "/sys/class/power_supply/charger_controller/device/at_pmrst",
 			"testmode", "battexit", "/sys/class/power_supply/battery/present"
 			;
+	};
+
+	hob_ram {
+		compatible = "mmi,hob_ram";
+		mmi,allocation-type-smem;
 	};
 };
 
